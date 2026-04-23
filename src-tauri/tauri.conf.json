@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DevNest",
+  "version": "0.1.3",
+  "identifier": "dev.aetherone.devnest",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "DevNest",
+        "width": 1440,
+        "height": 810,
+        "minWidth": 1100,
+        "minHeight": 720,
+        "center": true,
+        "resizable": true,
+        "decorations": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/hohphu8/devnest/releases/latest/download/stable.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ2NzMwQTIzMzdEN0MyNzgKUldSNHd0YzNJd3B6Um9WQUhURktIYjV1Y0wweUJybG1HSzN1VEpNQW1DV0FMN0ZkRnJ1eVEzT0YK"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "resources": [
+      "resources/**/*"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "copyright": "Copyright (c) 2026 Aetherone",
+    "category": "Productivity",
+    "shortDescription": "DevNest is a desktop application for managing your development projects and environments.",
+    "longDescription": "DevNest is a desktop application for managing development projects and environments. It provides a unified interface to organize code, dependencies, and tools, making it easier to switch between projects and maintain a consistent workflow."
+  }
+}

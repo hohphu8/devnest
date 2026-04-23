@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://devnest.one/sitemap.xml

@@ -1,0 +1,43 @@
+{
+  "packages": [
+    {
+      "id": "mailpit-1.29.7-win-x64",
+      "toolType": "mailpit",
+      "version": "1.29.7",
+      "platform": "windows",
+      "arch": "x64",
+      "displayName": "Mailpit 1.29.7",
+      "downloadUrl": "https://github.com/axllent/mailpit/releases/download/v1.29.7/mailpit-windows-amd64.zip",
+      "checksumSha256": null,
+      "archiveKind": "zip",
+      "entryBinary": "mailpit.exe",
+      "notes": "Optional local SMTP inbox and web UI for PHP mail testing."
+    },
+    {
+      "id": "cloudflared-2025.10.1-win-x64",
+      "toolType": "cloudflared",
+      "version": "2025.10.1",
+      "platform": "windows",
+      "arch": "x64",
+      "displayName": "cloudflared 2025.10.1",
+      "downloadUrl": "https://github.com/cloudflare/cloudflared/releases/download/2025.10.1/cloudflared-windows-amd64.exe",
+      "checksumSha256": "272c1fabc6297302cbb187f4e603d4be4330907b537354a443ee154c4e0ed8a3",
+      "archiveKind": "binary",
+      "entryBinary": "cloudflared.exe",
+      "notes": "Optional quick-tunnel client used by DevNest project sharing."
+    },
+    {
+      "id": "phpmyadmin-5.2.3-all-languages",
+      "toolType": "phpmyadmin",
+      "version": "5.2.3",
+      "platform": "windows",
+      "arch": "x64",
+      "displayName": "phpMyAdmin 5.2.3",
+      "downloadUrl": "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.zip",
+      "checksumSha256": null,
+      "archiveKind": "zip",
+      "entryBinary": "phpMyAdmin-5.2.3-all-languages/index.php",
+      "notes": "Managed phpMyAdmin web UI mapped to http://phpmyadmin.test for local database access."
+    }
+  ]
+}

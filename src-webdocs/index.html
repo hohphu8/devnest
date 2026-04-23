@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DevNest | Local PHP Workspace for Windows</title>
+    <meta name="author" content="HoHPhu" />
+    <meta name="application-name" content="DevNest" />
+    <meta name="theme-color" content="#050816" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <meta
+      name="keywords"
+      content="DevNest, PHP development, Windows PHP workspace, Laravel local dev, WordPress local dev, local PHP stack, Tauri desktop app, PHP runtime manager, Laragon alternative, XAMPP alternative"
+    />
+    <meta
+      name="robots"
+      content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"
+    />
+    <meta
+      name="description"
+      content="DevNest is a local PHP workspace for Windows with Smart Scan, runtime management, diagnostics, QR preview, Cloudflare sharing, recovery, and automation."
+    />
+    <link rel="canonical" href="https://devnest.one/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="DevNest" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:url" content="https://devnest.one/" />
+    <meta property="og:title" content="DevNest | Local PHP Workspace for Windows" />
+    <meta
+      property="og:description"
+      content="Local PHP workspace for Windows with Smart Scan, runtime management, diagnostics, mobile preview, Cloudflare sharing, recovery, and automation."
+    />
+    <meta property="og:image" content="https://devnest.one/og-image.png" />
+    <meta property="og:image:alt" content="DevNest dashboard preview" />
+    <meta property="og:image:width" content="1920" />
+    <meta property="og:image:height" content="1080" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://devnest.one/" />
+    <meta name="twitter:title" content="DevNest | Local PHP Workspace for Windows" />
+    <meta
+      name="twitter:description"
+      content="Local PHP workspace for Windows with Smart Scan, runtime management, diagnostics, sharing, recovery, and automation."
+    />
+    <meta name="twitter:image" content="https://devnest.one/og-image.png" />
+    <meta name="twitter:image:alt" content="DevNest dashboard preview" />
+    <link rel="icon" type="image/png" sizes="250x250" href="https://devnest.one/icon.png" />
+    <link rel="apple-touch-icon" href="https://devnest.one/icon.png" />
+    <link rel="shortcut icon" href="https://devnest.one/icon.png" />
+    <link rel="manifest" href="https://devnest.one/site.webmanifest" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "DevNest",
+        "url": "https://devnest.one/",
+        "downloadUrl": "https://github.com/hohphu8/devnest/releases",
+        "image": "https://devnest.one/og-image.png",
+        "operatingSystem": "Windows",
+        "applicationCategory": "DeveloperApplication",
+        "softwareVersion": "0.1.4",
+        "description": "DevNest is a local PHP workspace for Windows with Smart Scan, runtime management, diagnostics, QR preview, Cloudflare sharing, recovery, and automation.",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "publisher": {
+          "@type": "Person",
+          "name": "HoHPhu"
+        },
+        "sameAs": [
+          "https://github.com/hohphu8/devnest"
+        ]
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "DevNest",
+        "url": "https://devnest.one/",
+        "description": "DevNest is a local PHP workspace for Windows.",
+        "publisher": {
+          "@type": "Person",
+          "name": "HoHPhu"
+        }
+      }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="site-shell home-shell">
+      <header class="home-topbar">
+        <div class="container-docs home-nav">
+          <a href="./index.html" class="brand-lockup">
+            <span class="brand-mark">
+              <svg viewBox="0 0 32 32" class="h-6 w-6 text-violet-300" aria-hidden="true">
+                <rect x="4" y="6" width="10" height="8" rx="2" fill="currentColor"></rect>
+                <rect x="18" y="6" width="10" height="8" rx="2" fill="currentColor" opacity="0.72"></rect>
+                <rect x="4" y="18" width="10" height="8" rx="2" fill="currentColor" opacity="0.72"></rect>
+                <rect x="18" y="18" width="10" height="8" rx="2" fill="currentColor"></rect>
+              </svg>
+            </span>
+            <span>
+              <span class="block text-base font-extrabold tracking-[-0.04em] text-white">DevNest</span>
+              <span class="block text-[11px] uppercase tracking-[0.22em] text-ink-400">v0.1.4</span>
+            </span>
+          </a>
+
+          <nav class="top-links hidden md:flex" aria-label="Primary">
+            <a href="#features" class="top-link">Features</a>
+            <a href="#tooling" class="top-link">Tooling</a>
+            <a href="#community" class="top-link">Community</a>
+            <a href="#download" class="top-link">Download</a>
+            <a href="https://github.com/hohphu8/devnest" class="button-secondary">GitHub</a>
+          </nav>
+
+          <details class="mobile-menu md:hidden">
+            <summary class="mobile-menu-button">Menu</summary>
+            <div class="mobile-menu-panel">
+              <a href="#features" class="mobile-menu-link">Features</a>
+              <a href="#tooling" class="mobile-menu-link">Tooling</a>
+              <a href="#community" class="mobile-menu-link">Community</a>
+              <a href="#download" class="mobile-menu-link">Download</a>
+              <a href="https://github.com/hohphu8/devnest" class="mobile-menu-link">GitHub</a>
+            </div>
+          </details>
+        </div>
+      </header>
+
+      <main class="container-docs">
+        <section class="home-hero">
+          <div class="home-hero-copy lg:col-span-2">
+            <div class="home-tag">HoHPhu</div>
+            <h1 class="home-hero-title">Local PHP Workspace for Windows</h1>
+            <p class="home-hero-copy-text">
+              DevNest helps Laravel, WordPress, and plain PHP projects on Windows with Smart Scan, managed runtimes, readable diagnostics, sharing, recovery, and automation.
+            </p>
+            <div class="home-actions">
+              <a href="https://github.com/hohphu8/devnest/releases" class="button-primary">Get Started</a>
+              <a href="https://github.com/hohphu8/devnest" class="button-ghost">View on GitHub</a>
+            </div>
+            <div class="hero-jump-links">
+              <a href="#features" class="hero-jump-link">Smart Scan</a>
+              <a href="#tooling" class="hero-jump-link">Tooling</a>
+              <a href="#community" class="hero-jump-link">Community</a>
+              <a href="#download" class="hero-jump-link">Download</a>
+            </div>
+          </div>
+
+          <div class="home-hero-visual p-0 lg:col-span-3">
+            <figure class="hero-stage">
+              <img
+                src="./assets/images/dashboard.png"
+                alt="Placeholder hero screenshot for the DevNest workspace overview."
+                class="w-full"
+              />
+            </figure>
+          </div>
+        </section>
+
+        <section class="home-command-strip">
+          <div class="command-grid">
+            <div class="command-box text-xs">
+              <div class="command-tabs">
+                <span class="command-tab">Flow</span>
+                <span>Import</span>
+                <span>Run</span>
+                <span>Recover</span>
+              </div>
+              <div><span class="text-violet-300">$</span> pick project folder</div>
+              <div><span class="text-violet-300">$</span> scan for framework, domain, php, document root</div>
+              <div><span class="text-violet-300">$</span> apply config, start services, inspect diagnostics</div>
+            </div>
+            <div class="command-aside">
+              <div class="home-tag">What DevNest solves</div>
+              <div class="text-sm leading-6 text-ink-300">Less setup drift. More project context. Fewer raw logs on the main path.</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="trust" class="trust-band">
+          <div class="trust-heading">Trusted by the stack you already work with</div>
+          <div class="trust-logos">
+            <div class="trust-logo">
+              <img src="./assets/images/trusted/Laravel.png" alt="Laravel logo" class="h-8 object-contain" />
+              Laravel</div>
+            <div class="trust-logo">
+              <img src="./assets/images/trusted/WordPress.png" alt="WordPress logo" class="h-8 object-contain" />
+              WordPress</div>
+            <div class="trust-logo">
+              <img src="./assets/images/trusted/Apache.webp" alt="Apache logo" class="h-8 object-contain" />
+              Apache</div>
+            <div class="trust-logo">
+              <img src="./assets/images/trusted/Nginx.webp" alt="Nginx logo" class="h-8 object-contain" />
+              Nginx</div>
+            <div class="trust-logo">
+              <img src="./assets/images/trusted/MySQL.svg" alt="MySQL logo" class="h-8 object-contain" />
+              MySQL</div>
+            <div class="trust-logo">
+              <img src="./assets/images/trusted/Cloudflare.png" alt="Cloudflare logo" class="h-8 object-contain" />
+              Cloudflare</div>
+          </div>
+        </section>
+
+        <section class="center-band">
+          <h2 class="center-title">Redefining local developer experience</h2>
+          <p class="center-copy">DevNest makes Windows PHP development feel calmer, faster, and easier to reason about.</p>
+        </section>
+
+        <section id="features" class="feature-matrix">
+          <article class="feature-cell">
+            <h3 class="feature-title">Instant Smart Scan</h3>
+            <p class="feature-copy">
+              Scan Laravel, WordPress, and plain PHP apps with domain suggestion, document-root inference, and runtime hints.
+            </p>
+            <figure class="feature-visual">
+              <img src="./assets/images/AddProject.png" alt="Placeholder screenshot for DevNest Smart Scan results." class="w-full" />
+            </figure>
+          </article>
+
+          <article class="feature-cell">
+            <h3 class="feature-title">Readable diagnostics</h3>
+            <p class="feature-copy">
+              Port conflicts, document-root mistakes, SSL trust issues, missing PHP extensions, and startup failures turn into
+              practical next steps.
+            </p>
+            <div class="mini-note-grid">
+              <div class="mini-note">Port 80 already in use</div>
+              <div class="mini-note">Laravel should point to /public</div>
+              <div class="mini-note">mod_rewrite is not enabled</div>
+              <div class="mini-note">MySQL startup failed</div>
+            </div>
+          </article>
+
+          <article class="feature-cell">
+            <h3 class="feature-title">Rich features out of the box</h3>
+            <p class="feature-copy">
+              Managed config, hosts automation, SSL, phpMyAdmin, Mailpit, Redis, workers, scheduled tasks, and env visibility.
+            </p>
+            <div class="mini-note-grid">
+              <div class="mini-note">Apache and Nginx config generation</div>
+              <div class="mini-note">PHP CLI follows active runtime</div>
+              <div class="mini-note">Project-owned workers and tasks</div>
+              <div class="mini-note">Env diff against real .env on disk</div>
+            </div>
+          </article>
+
+          <article class="feature-cell">
+            <h3 class="feature-title">Optimized recovery</h3>
+            <p class="feature-copy">
+              Backup and restore are there, but Database Time Machine is what makes rollback fast, managed, and less stressful.
+            </p>
+            <figure class="feature-visual">
+              <img
+                src="./assets/images/DBTimeM.png"
+                alt="Placeholder screenshot for DevNest Database Time Machine history and rollback."
+                class="w-full"
+              />
+            </figure>
+          </article>
+        </section>
+
+        <section class="center-band">
+          <h2 class="center-title">A shared foundation to build upon</h2>
+        </section>
+
+        <section id="tooling" class="feature-matrix">
+          <article class="feature-cell">
+            <h3 class="feature-title">Flexible project model</h3>
+            <p class="feature-copy">
+              The project stays central. Local domain, runtime, diagnostics, sharing, and automation all hang off that model.
+            </p>
+            <div class="mini-note-grid">
+              <div class="mini-note">Easy set local domain</div>
+              <div class="mini-note">Configure runtime by selecting a version</div>
+              <div class="mini-note">Run diagnostics and get actionable insights</div>
+              <div class="mini-note">Share project with team members</div>
+            </div>
+          </article>
+
+          <article class="feature-cell">
+            <h3 class="feature-title">Checking for Updates</h3>
+            <p class="feature-copy">
+              Check the signed Windows release feed, then install packaged updates without leaving DevNest.
+            </p>
+            <figure class="feature-visual">
+              <img src="./assets/images/CheckUpdateS.png" alt="Placeholder screenshot for DevNest project detail view." class="w-full" />
+            </figure>
+          </article>
+
+          <article class="feature-cell">
+            <h3 class="feature-title">First class share support</h3>
+            <p class="feature-copy">
+              Same-WiFi QR preview for quick phone checks, plus Cloudflare tunnel flows when you need a public URL.
+            </p>
+            <figure class="feature-visual">
+              <div class="mini-note">One click to Cloudflare Quick Tunnel / Persistent Domains</div>
+              <img src="./assets/images/TunnelCF.png" alt="Placeholder screenshot for DevNest project detail view." class="w-full" />
+            </figure>
+            <figure class="feature-visual">
+              <div class="mini-note">QR share preview, proxy a public URL</div>
+              <img src="./assets/images/QR-Share.png" alt="QR share functionality" class="w-full" />
+            </figure>
+          </article>
+
+          <article class="feature-cell">
+            <h3 class="feature-title">Continuous ecosystem integration</h3>
+            <p class="feature-copy">
+              DevNest is built around how Windows PHP developers actually work day to day.
+            </p>
+            <figure class="feature-visual">
+              <div class="mini-note">Switch between PHP versions, and then it applies to CLI commands. <i>php -v..</i></div>
+              <img src="./assets/images/SwitchPHP.png" alt="Switching PHP versions" class="w-full" />
+            </figure>
+            <figure class="feature-visual">
+              <div class="mini-note">Install PHP versions directly from the interface</div>
+              <img src="./assets/images/PHPI-Setting.png" alt="Installing PHP versions" class="w-full" />
+            </figure>
+          </article>
+        </section>
+
+        <section class="center-band">
+          <h2 class="center-title">Powering your favorite workflows and tools</h2>
+        </section>
+
+        <section class="framework-band">
+          <div class="framework-grid">
+            <figure class="feature-visual">
+              <div class="mini-note">Manage PHP extensions and functionality</div>
+              <img src="./assets/images/PHPTool.png" alt="PHP development tools" class="w-full" />
+            </figure>
+            <figure class="feature-visual">
+              <div class="mini-note">GUI for PHP configuration</div>
+              <img src="./assets/images/PHPConfig.png" alt="PHP configuration interface" class="w-full" />
+            </figure>
+            <figure class="feature-visual">
+              <div class="mini-note">Cloudflare tunnel connection</div>
+              <img src="./assets/images/CFTunnelConnect.png" alt="Cloudflare tunnel connection interface" class="w-full" />
+            </figure>
+            <figure class="feature-visual">
+              <div class="mini-note">After connect from Cloudflare, create a new tunnel for tunneling</div>
+              <img src="./assets/images/CreateTunnel.png" alt="Create Cloudflare tunnel interface" class="w-full" />
+            </figure>
+            <figure class="feature-visual">
+              <div class="mini-note">Apache/NGINX configuration</div>
+              <img src="./assets/images/WebServerConfig.png" alt="Web server configuration interface" class="w-full" />
+            </figure>
+            <figure class="feature-visual">
+              <div class="mini-note">Live runtime control, PID tracking, port checks, logs,.. for the local PHP stack.</div>
+              <img src="./assets/images/Services.png" alt="Live runtime control interface" class="w-full" />
+            </figure>
+            <figure class="feature-visual">
+              <div class="mini-note">Per-project scheduled commands and URL tasks managed with recurring timing, run history, and log access.</div>
+              <img src="./assets/images/Tasks.png" alt="Task management interface" class="w-full" />
+            </figure>
+            <figure class="feature-visual">
+              <div class="mini-note">Per-project queue, schedule, and custom background commands managed without open terminal windows.</div>
+              <img src="./assets/images/Workers.png" alt="Worker management interface" class="w-full" />
+            </figure>
+          </div>
+        </section>
+
+        <section id="compare" class="center-band">
+          <h2 class="center-title">A calmer workflow than juggling stack tools by hand</h2>
+          <p class="center-copy">
+            If Laragon or XAMPP already fits your workflow, that is fine. DevNest is for Windows PHP developers who want the
+            local stack to stay attached to the project instead of living as a separate control panel.
+          </p>
+        </section>
+
+        <section class="feature-matrix">
+          <article class="feature-cell">
+            <h3 class="feature-title">DevNest vs Laragon workflow</h3>
+            <p class="feature-copy">
+              <a href="https://laragon.org/" target="_blank">Laragon</a> is fast and familiar, but DevNest goes harder on project context: Smart Scan, managed runtime selection,
+              readable diagnostics, QR preview, workers, scheduled tasks, and database rollback all stay inside one project flow.
+            </p>
+            <div class="mini-note-grid">
+              <div class="mini-note">Import folder, detect framework, and prefill the local stack shape</div>
+              <div class="mini-note">Keep domain, runtime, env context, automation, and recovery on the same project record</div>
+            </div>
+          </article>
+
+          <article class="feature-cell">
+            <h3 class="feature-title">DevNest vs XAMPP workflow</h3>
+            <p class="feature-copy">
+              <a href="https://www.apachefriends.org/" target="_blank">XAMPP</a> gives you the basics, but DevNest is built for a modern Windows PHP workflow where multiple projects need
+              different runtimes, clearer errors, local sharing, and less manual config editing.
+            </p>
+            <div class="mini-note-grid">
+              <div class="mini-note">Managed Apache or Nginx config instead of relying on hand-edited setup first</div>
+              <div class="mini-note">Project-first diagnostics and recovery instead of jumping between logs, terminals, and scattered tools</div>
+            </div>
+          </article>
+        </section>
+
+        <section id="community" class="community-shell">
+          <div class="community-intro">
+            <h2 class="feature-title">Loved by the workflow</h2>
+            <p class="feature-copy">
+              Do not take our word for it. The product should make sense at a glance: import, run, diagnose, share, recover.
+            </p>
+            <div class="community-stats">
+              <div>
+                <div class="community-stat-number">Project-first</div>
+                <div class="mt-2 text-sm text-ink-300">One model for local stack, preview, and recovery.</div>
+              </div>
+              <div>
+                <div class="community-stat-number">Windows-native</div>
+                <div class="mt-2 text-sm text-ink-300">Built around the paths, permissions, and runtime habits that actually matter.</div>
+              </div>
+            </div>
+          </div>
+          <div class="community-cards">
+            <div class="testimonial-grid">
+              <article class="testimonial-card">
+                <p class="testimonial-copy">"Import the project, see the runtime shape, then fix real issues instead of redoing local setup."</p>
+                <div class="testimonial-author">Smart Scan</div>
+              </article>
+              <article class="testimonial-card">
+                <p class="testimonial-copy">"The app is strongest when a broken local environment becomes a readable state instead of a guessing game."</p>
+                <div class="testimonial-author">Diagnostics</div>
+              </article>
+              <article class="testimonial-card">
+                <p class="testimonial-copy">"Database rollback, workers, and scheduled tasks belong in the project workflow, not a forgotten terminal window."</p>
+                <div class="testimonial-author">Automation</div>
+              </article>
+              <article class="testimonial-card">
+                <p class="testimonial-copy">"Same-WiFi QR preview and Cloudflare sharing solve different jobs. DevNest covers both without confusion."</p>
+                <div class="testimonial-author">Preview and Sharing</div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="download" class="sponsor-shell">
+          <div class="sponsor-top">
+            <div>
+              <h2 class="feature-title">Free and open source for the community</h2>
+              <p class="feature-copy max-w-2xl">
+                Ship it through GitHub Releases, keep the source open on GitHub, and add a soft support link later if you want to fund more polish.
+              </p>
+            </div>
+            <div class="flex items-center justify-start lg:justify-end">
+              <a href="https://github.com/hohphu8/devnest/releases" class="button-primary">Download release</a>
+            </div>
+          </div>
+          <div class="sponsor-grid">
+            <div class="sponsor-cell">Laravel apps</div>
+            <div class="sponsor-cell"></div>
+            <div class="sponsor-cell">Apache / Nginx</div>
+            <div class="sponsor-cell"></div>
+            <div class="sponsor-cell"></div>
+            <div class="sponsor-cell">Cloudflare sharing</div>
+            <div class="sponsor-cell"></div>
+            <div class="sponsor-cell">MySQL workflows</div>
+          </div>
+        </section>
+
+        <section class="cta-beam">
+          <h2 class="cta-beam-title">Start building with DevNest</h2>
+          <p class="center-copy">
+            Prepare for a local PHP environment that can keep pace with the project instead of fighting it.
+          </p>
+          <div class="mt-8 flex justify-center">
+            <a href="https://github.com/hohphu8/devnest/releases" class="button-primary">Get Started</a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer-shell">
+        <div class="container-docs footer-grid">
+          <div>
+            <div class="footer-heading">DevNest</div>
+            <p class="footer-copy">
+              A Windows-first local PHP workspace for Smart Scan, runtime control, readable diagnostics, and safer recovery.
+            </p>
+          </div>
+          <div>
+            <div class="footer-heading">Sections</div>
+            <div class="footer-link-list">
+              <a href="#features" class="footer-link">Features</a>
+              <a href="#tooling" class="footer-link">Tooling</a>
+              <a href="#community" class="footer-link">Community</a>
+              <a href="#download" class="footer-link">Download</a>
+            </div>
+          </div>
+          <div>
+            <div class="footer-heading">Links</div>
+            <div class="footer-link-list">
+              <a href="https://github.com/hohphu8/devnest" class="footer-link">GitHub</a>
+              <a href="https://github.com/hohphu8/devnest/releases" class="footer-link">Releases</a>
+              <a href="https://github.com/hohphu8/devnest/blob/main/LICENSE.md" class="footer-link">MIT License</a>
+            </div>
+          </div>
+          <div>
+            <div class="footer-heading">Legal</div>
+            <div class="footer-link-list">
+              <a href="./privacy-policy.html" class="footer-link">Privacy Policy</a>
+              <a href="./terms-of-use.html" class="footer-link">Terms of Use</a>
+              <span class="footer-link">Version 0.1.4</span>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+    <script type="module" src="./site.js"></script>
+  </body>
+</html>

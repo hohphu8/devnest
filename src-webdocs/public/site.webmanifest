@@ -1,0 +1,16 @@
+{
+  "name": "DevNest",
+  "short_name": "DevNest",
+  "description": "Project-first local PHP workspace for Windows.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050816",
+  "theme_color": "#050816",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "250x250",
+      "type": "image/png"
+    }
+  ]
+}

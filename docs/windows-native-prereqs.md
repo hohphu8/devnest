@@ -1,101 +1,109 @@
-# Windows Native Prerequisites For DevNest
+# Windows Native Prerequisites for DevNest
 
-## Mục tiêu
+## Goal
 
-Tài liệu này chốt các prerequisite tối thiểu để phần native `src-tauri` của DevNest build được trên Windows.
+This document defines the minimum native prerequisites required to build the `src-tauri` part of DevNest on Windows.
 
-## Tình trạng môi trường hiện tại
+## Current environment assumptions
 
-Theo kết quả xác minh gần nhất:
+Based on recent local verification, a working Windows machine should have:
 
-- Node.js: có
-- npm: có
-- cargo: có
-- rustc: có
-- MSVC C++ Build Tools: có
-- Windows SDK libraries: có
-- `PATH` của shell thường vẫn đang trỏ `link.exe` sang `D:\laragon\bin\git\usr\bin\link.exe`
-- Repo đã có linker wrapper để `cargo check` vẫn pass dù `PATH` bẩn
+- Node.js
+- npm
+- cargo
+- rustc
+- MSVC C++ Build Tools
+- Windows SDK libraries
 
-## DevNest cần gì
+One known Windows-specific problem is that a normal shell may still resolve `link.exe` to a Git or Laragon path instead of the MSVC linker.
 
-### Bắt buộc
+Example of a bad linker path:
 
-1. Rust toolchain `x86_64-pc-windows-msvc`
-2. Visual Studio Build Tools với workload Desktop development with C++
-3. Windows 10/11 SDK libraries
+```text
+D:\laragon\bin\git\usr\bin\link.exe
+```
 
-### Tối thiểu phải có các thành phần này
+The repository already includes a linker wrapper to reduce this problem when the machine has the real MSVC and Windows SDK components installed.
 
-- `link.exe` của MSVC
+## Required components
+
+### Required
+
+1. Rust toolchain: `x86_64-pc-windows-msvc`
+2. Visual Studio Build Tools with `Desktop development with C++`
+3. Windows 10 or Windows 11 SDK libraries
+
+### Native pieces that must exist
+
+- `link.exe` from MSVC
 - `kernel32.lib`
 - `ntdll.lib`
 - `userenv.lib`
 - `ws2_32.lib`
 - `dbghelp.lib`
 
-## Cách tự kiểm tra
+## How to verify the machine
 
-Chạy:
+Run:
 
 ```powershell
 npm run check:env
 ```
 
-Nếu pass đầy đủ, script phải không còn báo `MISSING` cho:
+The script should not report `MISSING` for:
 
 - `MSVC toolchain root`
 - `Windows SDK lib root`
 - `PATH linker`
 
-## Dấu hiệu môi trường đang sai
+## Common failure modes
 
-### Case 1: PATH dính linker của Git
+### Case 1: PATH resolves to Git's linker
 
-Ví dụ sai:
+Example:
 
 ```text
 D:\laragon\bin\git\usr\bin\link.exe
 ```
 
-Linker này không dùng được cho Rust target `x86_64-pc-windows-msvc`.
+That linker is not valid for the Rust target `x86_64-pc-windows-msvc`.
 
-### Case 2: Có Rust nhưng không có SDK libs
+### Case 2: Rust exists but Windows SDK libraries do not
 
-Lúc `cargo check` sẽ fail với lỗi kiểu:
+In that case `cargo check` usually fails with errors like:
 
 - `could not open 'kernel32.lib'`
 - `could not open 'ntdll.lib'`
 
-## Repo-level workaround hiện có
+## Repo-level workaround already included
 
-Repo đã có:
+The repository already contains:
 
 - `src-tauri/.cargo/config.toml`
 - `src-tauri/.cargo/msvc-linker.cmd`
 
-Mục tiêu là:
+The purpose of this workaround is:
 
-- bypass `link.exe` của Git/Laragon trong shell thường
-- tự tìm `link.exe` của MSVC
-- tự set `LIB` tới MSVC và Windows SDK libs trước khi link
+- bypass a Git or Laragon `link.exe` in a normal shell
+- locate the real MSVC `link.exe`
+- set `LIB` to the correct MSVC and Windows SDK library paths before linking
 
-Lưu ý:
+Notes:
 
-- Workaround này không thay thế việc thiếu SDK/MSVC thật.
-- Nếu máy đã có SDK/MSVC nhưng shell bẩn, wrapper này giúp `cargo check` chạy được ngay.
+- This workaround does not replace missing MSVC or SDK installations.
+- If the machine already has MSVC and the Windows SDK, but the shell PATH is dirty, the wrapper should allow `cargo check` to run successfully.
 
-## Khi nào được coi là native-ready
+## When the machine is native-ready
 
-Môi trường chỉ được coi là sẵn sàng khi:
+The environment should only be considered ready when:
 
-1. `npm run check:env` báo `OK` cho `MSVC toolchain root`, `Windows SDK lib root`, và `Repo linker wrapper`
-2. `cargo check` trong `src-tauri` pass từ shell thường
-3. Tauri commands mẫu như `ping` và `get_boot_state` build được
+1. `npm run check:env` reports `OK` for `MSVC toolchain root`, `Windows SDK lib root`, and `Repo linker wrapper`
+2. `cargo check` in `src-tauri` passes from a normal shell
+3. Sample Tauri commands such as `ping` and `get_boot_state` build successfully
 
-## Gợi ý quy trình sau khi máy đã có build tools
+## Recommended setup flow after installing build tools
 
-1. Chạy `npm run check:env`
-2. Chạy `cargo check` trong `src-tauri`
-3. Chạy `npm run build`
-4. Nếu cả ba pass, tiếp tục lock phần verify của Phase 00
+1. Run `npm run check:env`
+2. Run `cargo check` inside `src-tauri`
+3. Run `npm run build`
+4. If all three pass, the machine is ready for normal DevNest native development work

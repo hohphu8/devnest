@@ -545,16 +545,20 @@ if (-not $SkipBuild) {
   Stop-LockedBuildProcess -ExecutablePath $workspaceReleaseExecutablePath
 
   Write-Step "Building Windows $Bundle release"
+  $updaterEndpoints = @(if (-not [string]::IsNullOrWhiteSpace($resolvedUpdateEndpoint)) {
+    $resolvedUpdateEndpoint
+  })
   $tauriBuildConfigOverride = @{
     build = @{
       beforeBuildCommand = $null
     }
     plugins = @{
-      updater = @{}
+      updater = @{
+        endpoints = $updaterEndpoints
+        pubkey = $publicKey
+      }
     }
   }
-  $tauriBuildConfigOverride.plugins.updater["endpoints"] = if ([string]::IsNullOrWhiteSpace($resolvedUpdateEndpoint)) { @() } else { @($resolvedUpdateEndpoint) }
-  $tauriBuildConfigOverride.plugins.updater["pubkey"] = $publicKey
   $tauriBuildConfigOverride = $tauriBuildConfigOverride | ConvertTo-Json -Depth 4 -Compress
   Write-Utf8NoBom -Path $tauriBuildConfigOverridePath -Value $tauriBuildConfigOverride
   foreach ($bundleName in $bundlesToProcess) {

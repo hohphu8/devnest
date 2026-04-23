@@ -1,7 +1,10 @@
 node_modules/
 package-lock.json
 dist/
-docs/
+docs/*
+!docs/pre-release-manual-qa.md
+!docs/release-update-playbook.md
+!docs/windows-native-prereqs.md
 src-webdocs/dist/
 .vite/
 target/
@@ -44,3 +47,6 @@ PLANS.md
 
 .DS_Store
 Thumbs.db
+
+tmp-release-stdout.txt
+tmp-release-stderr.txt

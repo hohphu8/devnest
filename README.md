@@ -121,6 +121,16 @@ DevNest also includes UI and workflows for:
 - To install: click `Keep` -> `Show more` -> `Keep anyway`.
 - Security: the core app executable has scanned clean on VirusTotal in manual checks. Installer files may still trigger a few heuristic detections while the project is new and unsigned.
 
+## Development
+
+Install dependencies:
+
+- `npm install`
+
+Run the desktop app in development:
+
+- `npm run tauri dev`
+
 ## Webdocs
 
 The public website and legal pages live in [`src-webdocs`](./src-webdocs).
@@ -130,6 +140,33 @@ Local commands:
 - `npm --prefix src-webdocs install`
 - `npm --prefix src-webdocs run dev`
 - `npm --prefix src-webdocs run build`
+
+## Docs
+
+- [Windows native prerequisites](./docs/windows-native-prereqs.md)
+- [Release update playbook](./docs/release-update-playbook.md)
+- [Pre-release manual QA](./docs/pre-release-manual-qa.md)
+
+## Packaging and Self-Hosted Releases
+
+Anyone cloning the repo can build local Windows packages, but official DevNest releases are maintained separately.
+
+For your own packaged release flow:
+
+1. Generate your own updater signing keypair
+2. Point releases at your own GitHub repository or asset host
+3. Set your own release environment variables in the current PowerShell session
+4. Run `npm run release:windows` or `npm run release:windows:all`
+
+Typical release variables:
+
+- `DEVNEST_GITHUB_REPO=<your-user-or-org>/<your-release-repo>`
+- `DEVNEST_UPDATE_ENDPOINT=<your-public-stable.json-url>`
+- `DEVNEST_UPDATER_KEY_PATH=<path-to-your-private-updater-key>`
+
+Use `npm run release:windows:all` when you also want the MSI bundle uploaded alongside the default NSIS release.
+
+See [docs/release-update-playbook.md](./docs/release-update-playbook.md) for the full maintainer flow.
 
 ## Contributing
 

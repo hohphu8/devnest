@@ -126,6 +126,8 @@ const MOCK_PROJECT_PERSISTENT_HOSTNAMES_KEY = "devnest.mock.project-persistent-h
 const MOCK_PROJECT_PERSISTENT_TUNNELS_KEY = "devnest.mock.project-persistent-tunnels";
 const MOCK_PERSISTENT_TUNNEL_SETUP_KEY = "devnest.mock.persistent-tunnel-setup";
 const MOCK_PERSISTENT_NAMED_TUNNELS_KEY = "devnest.mock.persistent-named-tunnels";
+const MOCK_APP_DATA_ROOT = "C:/DevNest/mock-app-data";
+const MOCK_SHARED_ROOT = "C:/DevNest/mock-shared";
 const BROWSER_PREVIEW_UPDATE_ENDPOINT =
   "https://github.com/hohphu8/devnest/releases/latest/download/stable.json";
 
@@ -839,13 +841,13 @@ function defaultMockPhpAvailableExtensions(): string[] {
 function mockRuntimeConfigPath(runtime: RuntimeInventoryItem): string {
   switch (runtime.runtimeType) {
     case "php":
-      return `D:/Aetherone/devnest/.mock-app-data/service-state/php/${runtime.version}/php.ini`;
+      return `${MOCK_APP_DATA_ROOT}/service-state/php/${runtime.version}/php.ini`;
     case "apache":
-      return "D:/Aetherone/devnest/.mock-app-data/service-state/apache/httpd.conf";
+      return `${MOCK_APP_DATA_ROOT}/service-state/apache/httpd.conf`;
     case "nginx":
-      return "D:/Aetherone/devnest/.mock-app-data/service-state/nginx/nginx.conf";
+      return `${MOCK_APP_DATA_ROOT}/service-state/nginx/nginx.conf`;
     case "mysql":
-      return "D:/Aetherone/devnest/.mock-app-data/service-state/mysql/my.ini";
+      return `${MOCK_APP_DATA_ROOT}/service-state/mysql/my.ini`;
   }
 }
 
@@ -1589,8 +1591,7 @@ function defaultMockPersistentTunnelSetup(): PersistentTunnelSetupStatus {
     provider: "cloudflared",
     ready: false,
     managed: false,
-    binaryPath:
-      "D:/Aetherone/devnest/.mock-app-data/optional-tools/cloudflared/cloudflared.exe",
+    binaryPath: `${MOCK_APP_DATA_ROOT}/optional-tools/cloudflared/cloudflared.exe`,
     authCertPath: null,
     credentialsPath: null,
     tunnelId: null,
@@ -2729,7 +2730,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         databasePort?: number | null;
         envVars?: Array<{ envKey: string; envValue: string }>;
       };
-      const nextPath = `D:/Aetherone/devnest/.mock-shared/${projectProfile.rootNameHint}`;
+      const nextPath = `${MOCK_SHARED_ROOT}/${projectProfile.rootNameHint}`;
 
       const existing = readMockProjects();
       if (existing.some((project) => project.domain === projectProfile.domain)) {
@@ -3118,7 +3119,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       return {
         success: true,
         name,
-        path: `D:/Aetherone/devnest/.mock-app-data/backups/${name}.sql`,
+        path: `${MOCK_APP_DATA_ROOT}/backups/${name}.sql`,
       } as T;
     }
     case "restore_database": {
@@ -3144,7 +3145,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       return {
         success: true,
         name,
-        path: `D:/Aetherone/devnest/.mock-app-data/backups/${name}.sql`,
+        path: `${MOCK_APP_DATA_ROOT}/backups/${name}.sql`,
       } as T;
     }
     case "delete_project": {
@@ -3776,10 +3777,10 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
 
       const path =
         targetPackage.toolType === "mailpit"
-          ? `D:/Aetherone/devnest/.mock-app-data/optional-tools/downloaded/mailpit/${targetPackage.version}/mailpit.exe`
+          ? `${MOCK_APP_DATA_ROOT}/optional-tools/downloaded/mailpit/${targetPackage.version}/mailpit.exe`
           : targetPackage.toolType === "phpmyadmin"
-            ? `D:/Aetherone/devnest/.mock-app-data/optional-tools/downloaded/phpmyadmin/${targetPackage.version}/phpMyAdmin-${targetPackage.version}-all-languages/index.php`
-            : `D:/Aetherone/devnest/.mock-app-data/optional-tools/downloaded/cloudflared/${targetPackage.version}/cloudflared.exe`;
+            ? `${MOCK_APP_DATA_ROOT}/optional-tools/downloaded/phpmyadmin/${targetPackage.version}/phpMyAdmin-${targetPackage.version}-all-languages/index.php`
+            : `${MOCK_APP_DATA_ROOT}/optional-tools/downloaded/cloudflared/${targetPackage.version}/cloudflared.exe`;
       const next = {
         id: `${targetPackage.toolType}-${targetPackage.version}`,
         toolType: targetPackage.toolType,
@@ -3880,7 +3881,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         localUrl: `http://${project.domain}`,
         publicUrl: `https://${project.domain.replace(/\.test$/i, "") || "project"}.trycloudflare.com`,
         publicHostAliasSynced: true,
-        logPath: `D:/Aetherone/devnest/.mock-app-data/logs/tunnels/${projectId}.log`,
+        logPath: `${MOCK_APP_DATA_ROOT}/logs/tunnels/${projectId}.log`,
         binaryPath: "cloudflared",
         updatedAt: timestamp,
         details: "Mock tunnel is active through the optional cloudflared integration.",
@@ -3904,7 +3905,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         localUrl: `http://${project.domain}`,
         publicUrl: null,
         publicHostAliasSynced: false,
-        logPath: `D:/Aetherone/devnest/.mock-app-data/logs/tunnels/${projectId}.log`,
+        logPath: `${MOCK_APP_DATA_ROOT}/logs/tunnels/${projectId}.log`,
         binaryPath: "cloudflared",
         updatedAt: timestamp,
         details: "The optional public tunnel is stopped.",
@@ -3932,7 +3933,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const next = {
         ...current,
         managed: true,
-        authCertPath: "D:/Aetherone/devnest/.mock-app-data/persistent-tunnels/cloudflared/cert.pem",
+        authCertPath: `${MOCK_APP_DATA_ROOT}/persistent-tunnels/cloudflared/cert.pem`,
         details:
           "Cloudflare account is connected. Create or select a named tunnel next.",
       } satisfies PersistentTunnelSetupStatus;
@@ -3944,7 +3945,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const next = {
         ...current,
         managed: true,
-        authCertPath: "D:/Aetherone/devnest/.mock-app-data/persistent-tunnels/cloudflared/cert.pem",
+        authCertPath: `${MOCK_APP_DATA_ROOT}/persistent-tunnels/cloudflared/cert.pem`,
         details:
           "Managed cloudflared auth cert is available. Create or select a named tunnel next.",
       } satisfies PersistentTunnelSetupStatus;
@@ -3979,17 +3980,15 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         {
           tunnelId,
           tunnelName: name,
-          credentialsPath: `D:/Aetherone/devnest/.mock-app-data/persistent-tunnels/cloudflared/credentials/${tunnelId}.json`,
+          credentialsPath: `${MOCK_APP_DATA_ROOT}/persistent-tunnels/cloudflared/credentials/${tunnelId}.json`,
           selected: true,
         } satisfies PersistentTunnelNamedTunnelSummary,
       ];
       const next = {
         ...current,
         managed: true,
-        authCertPath:
-          current.authCertPath ??
-          "D:/Aetherone/devnest/.mock-app-data/persistent-tunnels/cloudflared/cert.pem",
-        credentialsPath: `D:/Aetherone/devnest/.mock-app-data/persistent-tunnels/cloudflared/credentials/${tunnelId}.json`,
+        authCertPath: current.authCertPath ?? `${MOCK_APP_DATA_ROOT}/persistent-tunnels/cloudflared/cert.pem`,
+        credentialsPath: `${MOCK_APP_DATA_ROOT}/persistent-tunnels/cloudflared/credentials/${tunnelId}.json`,
         tunnelId,
         tunnelName: name,
         ready: Boolean(current.binaryPath),
@@ -4006,7 +4005,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const next = {
         ...current,
         managed: true,
-        credentialsPath: `D:/Aetherone/devnest/.mock-app-data/persistent-tunnels/cloudflared/credentials/${tunnelId}.json`,
+        credentialsPath: `${MOCK_APP_DATA_ROOT}/persistent-tunnels/cloudflared/credentials/${tunnelId}.json`,
         tunnelId,
         tunnelName: current.tunnelName ?? "Imported tunnel",
         ready: Boolean(current.binaryPath && current.authCertPath),
@@ -4050,7 +4049,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         tunnelName: selectedTunnel.tunnelName,
         credentialsPath:
           selectedTunnel.credentialsPath ??
-          `D:/Aetherone/devnest/.mock-app-data/persistent-tunnels/cloudflared/credentials/${tunnelId}.json`,
+          `${MOCK_APP_DATA_ROOT}/persistent-tunnels/cloudflared/credentials/${tunnelId}.json`,
         ready: Boolean(current.binaryPath && current.authCertPath),
         details:
           "Named tunnel is selected. Set your default public zone, then publish projects with one click.",
@@ -4206,13 +4205,12 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         hostname: nextHostname.hostname,
         localUrl: `${project.sslEnabled ? "https" : "http"}://${project.domain}`,
         publicUrl: `https://${nextHostname.hostname}`,
-        logPath: `D:/Aetherone/devnest/.mock-app-data/logs/persistent-tunnels/${projectId}.log`,
-        binaryPath:
-          "D:/Aetherone/devnest/.mock-app-data/optional-tools/cloudflared/cloudflared.exe",
+        logPath: `${MOCK_APP_DATA_ROOT}/logs/persistent-tunnels/${projectId}.log`,
+        binaryPath: `${MOCK_APP_DATA_ROOT}/optional-tools/cloudflared/cloudflared.exe`,
         tunnelId: setup.tunnelId ?? "mock-devnest-tunnel",
         credentialsPath:
           setup.credentialsPath ??
-          "D:/Aetherone/devnest/.mock-app-data/persistent-tunnels/cloudflared/credentials/mock-devnest-tunnel.json",
+          `${MOCK_APP_DATA_ROOT}/persistent-tunnels/cloudflared/credentials/mock-devnest-tunnel.json`,
         updatedAt: timestamp,
         details: `Persistent tunnel is active for https://${nextHostname.hostname}.`,
       };
@@ -4340,13 +4338,12 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         hostname: nextHostname.hostname,
         localUrl: `${project.sslEnabled ? "https" : "http"}://${project.domain}`,
         publicUrl: `https://${nextHostname.hostname}`,
-        logPath: `D:/Aetherone/devnest/.mock-app-data/logs/persistent-tunnels/${projectId}.log`,
-        binaryPath:
-          "D:/Aetherone/devnest/.mock-app-data/optional-tools/cloudflared/cloudflared.exe",
+        logPath: `${MOCK_APP_DATA_ROOT}/logs/persistent-tunnels/${projectId}.log`,
+        binaryPath: `${MOCK_APP_DATA_ROOT}/optional-tools/cloudflared/cloudflared.exe`,
         tunnelId: setup.tunnelId ?? "mock-devnest-tunnel",
         credentialsPath:
           setup.credentialsPath ??
-          "D:/Aetherone/devnest/.mock-app-data/persistent-tunnels/cloudflared/credentials/mock-devnest-tunnel.json",
+          `${MOCK_APP_DATA_ROOT}/persistent-tunnels/cloudflared/credentials/mock-devnest-tunnel.json`,
         updatedAt: timestamp,
         details: `Persistent tunnel is active for https://${nextHostname.hostname}.`,
       };
@@ -4376,9 +4373,8 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         hostname: hostname.hostname,
         localUrl: `${project.sslEnabled ? "https" : "http"}://${project.domain}`,
         publicUrl: `https://${hostname.hostname}`,
-        logPath: `D:/Aetherone/devnest/.mock-app-data/logs/persistent-tunnels/${projectId}.log`,
-        binaryPath:
-          "D:/Aetherone/devnest/.mock-app-data/optional-tools/cloudflared/cloudflared.exe",
+        logPath: `${MOCK_APP_DATA_ROOT}/logs/persistent-tunnels/${projectId}.log`,
+        binaryPath: `${MOCK_APP_DATA_ROOT}/optional-tools/cloudflared/cloudflared.exe`,
         tunnelId: "mock-devnest-tunnel",
         credentialsPath: "C:/Users/mock/.cloudflared/devnest-tunnel.json",
         updatedAt: timestamp,
@@ -4404,9 +4400,8 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         hostname: hostname?.hostname ?? "not-configured",
         localUrl: `${project.sslEnabled ? "https" : "http"}://${project.domain}`,
         publicUrl: `https://${hostname?.hostname ?? "not-configured"}`,
-        logPath: `D:/Aetherone/devnest/.mock-app-data/logs/persistent-tunnels/${projectId}.log`,
-        binaryPath:
-          "D:/Aetherone/devnest/.mock-app-data/optional-tools/cloudflared/cloudflared.exe",
+        logPath: `${MOCK_APP_DATA_ROOT}/logs/persistent-tunnels/${projectId}.log`,
+        binaryPath: `${MOCK_APP_DATA_ROOT}/optional-tools/cloudflared/cloudflared.exe`,
         tunnelId: "mock-devnest-tunnel",
         credentialsPath: "C:/Users/mock/.cloudflared/devnest-tunnel.json",
         updatedAt: timestamp,
@@ -4436,9 +4431,8 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         hostname: hostname.hostname,
         localUrl: `${project.sslEnabled ? "https" : "http"}://${project.domain}`,
         publicUrl: `https://${hostname.hostname}`,
-        logPath: `D:/Aetherone/devnest/.mock-app-data/logs/persistent-tunnels/${projectId}.log`,
-        binaryPath:
-          "D:/Aetherone/devnest/.mock-app-data/optional-tools/cloudflared/cloudflared.exe",
+        logPath: `${MOCK_APP_DATA_ROOT}/logs/persistent-tunnels/${projectId}.log`,
+        binaryPath: `${MOCK_APP_DATA_ROOT}/optional-tools/cloudflared/cloudflared.exe`,
         tunnelId: readMockPersistentTunnelSetup().tunnelId ?? "mock-devnest-tunnel",
         credentialsPath: readMockPersistentTunnelSetup().credentialsPath,
         updatedAt: timestamp,
@@ -4856,7 +4850,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         services: readMockServices(),
         config: {
           serverType: project.serverType,
-          outputPath: `D:/Aetherone/devnest/.mock-app-data/configs/${project.domain}.conf`,
+          outputPath: `${MOCK_APP_DATA_ROOT}/configs/${project.domain}.conf`,
           preview: `# Mock ${project.serverType} config for ${project.domain}`,
           localDomainAliasPresent: Boolean(readMockHosts()[project.domain]),
           persistentAliasPresent: Boolean(readMockProjectPersistentHostnames()[projectId]),
@@ -4926,19 +4920,19 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const project = getMockProjectOrThrow(projectId);
       return {
         success: true,
-        path: `D:/Aetherone/devnest/.mock-app-data/exports/${project.domain}-diagnostics.json`,
+        path: `${MOCK_APP_DATA_ROOT}/exports/${project.domain}-diagnostics.json`,
       } satisfies ReliabilityTransferResult as T;
     }
     case "backup_app_metadata": {
       return {
         success: true,
-        path: "D:/Aetherone/devnest/.mock-app-data/exports/devnest-app-metadata-backup.json",
+        path: `${MOCK_APP_DATA_ROOT}/exports/devnest-app-metadata-backup.json`,
       } satisfies ReliabilityTransferResult as T;
     }
     case "restore_app_metadata": {
       return {
         success: true,
-        path: "D:/Aetherone/devnest/.mock-app-data/exports/devnest-app-metadata-backup.json",
+        path: `${MOCK_APP_DATA_ROOT}/exports/devnest-app-metadata-backup.json`,
       } satisfies ReliabilityTransferResult as T;
     }
     case "run_repair_workflow": {
@@ -4986,7 +4980,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
           localUrl: `http://${project.domain}`,
           publicUrl: `https://${project.domain.replace(/\.test$/i, "")}.trycloudflare.com`,
           publicHostAliasSynced: true,
-          logPath: `D:/Aetherone/devnest/.mock-app-data/logs/tunnels/${projectId}.log`,
+          logPath: `${MOCK_APP_DATA_ROOT}/logs/tunnels/${projectId}.log`,
           binaryPath: "cloudflared",
           updatedAt: timestamp,
           details: "Quick tunnel restarted in mock mode.",
@@ -5112,7 +5106,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         runtimeId: runtime.id,
         runtimeVersion: runtime.version,
         installedExtensions: [nextExtensionName],
-        sourcePath: `D:/Aetherone/devnest/.mock-app-data/php-extensions/${nextExtensionName}.dll`,
+        sourcePath: `${MOCK_APP_DATA_ROOT}/php-extensions/${nextExtensionName}.dll`,
       } satisfies PhpExtensionInstallResult) as T;
     }
     case "install_php_extension_package": {
@@ -5414,12 +5408,12 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
 
       const path =
         targetPackage.runtimeType === "php"
-          ? `D:/Aetherone/devnest/.mock-app-data/runtimes/downloaded/php/${targetPackage.version}/php.exe`
+          ? `${MOCK_APP_DATA_ROOT}/runtimes/downloaded/php/${targetPackage.version}/php.exe`
           : targetPackage.runtimeType === "apache"
-            ? `D:/Aetherone/devnest/.mock-app-data/runtimes/downloaded/apache/${targetPackage.version}/bin/httpd.exe`
+            ? `${MOCK_APP_DATA_ROOT}/runtimes/downloaded/apache/${targetPackage.version}/bin/httpd.exe`
             : targetPackage.runtimeType === "nginx"
-              ? `D:/Aetherone/devnest/.mock-app-data/runtimes/downloaded/nginx/${targetPackage.version}/nginx.exe`
-              : `D:/Aetherone/devnest/.mock-app-data/runtimes/downloaded/mysql/${targetPackage.version}/bin/mysqld.exe`;
+              ? `${MOCK_APP_DATA_ROOT}/runtimes/downloaded/nginx/${targetPackage.version}/nginx.exe`
+              : `${MOCK_APP_DATA_ROOT}/runtimes/downloaded/mysql/${targetPackage.version}/bin/mysqld.exe`;
 
       const next = {
         id: `${targetPackage.runtimeType}-${targetPackage.version}`,
@@ -5506,12 +5500,12 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         runtimeType === "php" ? "8.2.12" : runtimeType === "apache" ? "2.4.54" : runtimeType === "nginx" ? "1.22.0" : "8.0.30";
       const managedPath =
         runtimeType === "php"
-          ? `D:/Aetherone/devnest/.mock-app-data/runtimes/php/${version}/php.exe`
+          ? `${MOCK_APP_DATA_ROOT}/runtimes/php/${version}/php.exe`
           : runtimeType === "apache"
-            ? `D:/Aetherone/devnest/.mock-app-data/runtimes/apache/${version}/bin/httpd.exe`
+            ? `${MOCK_APP_DATA_ROOT}/runtimes/apache/${version}/bin/httpd.exe`
             : runtimeType === "nginx"
-              ? `D:/Aetherone/devnest/.mock-app-data/runtimes/nginx/${version}/nginx.exe`
-              : `D:/Aetherone/devnest/.mock-app-data/runtimes/mysql/${version}/bin/mysqld.exe`;
+              ? `${MOCK_APP_DATA_ROOT}/runtimes/nginx/${version}/nginx.exe`
+              : `${MOCK_APP_DATA_ROOT}/runtimes/mysql/${version}/bin/mysqld.exe`;
       const next = {
         id: `${runtimeType}-${version}`,
         runtimeType,

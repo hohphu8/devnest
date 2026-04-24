@@ -1,3 +1,4 @@
+use crate::commands::persistent_tunnels;
 use crate::core::service_manager;
 use crate::error::AppError;
 use crate::models::service::ServiceName;
@@ -46,7 +47,14 @@ pub fn stop_service(
 ) -> Result<ServiceState, AppError> {
     let connection = connection_from_state(&state)?;
     let service = ServiceRepository::get(&connection, &name)?;
-    service_manager::stop_service(&connection, &state, service.name)
+    let service_name = service.name;
+    let stopped = service_manager::stop_service(&connection, &state, service_name.clone())?;
+    persistent_tunnels::reset_persistent_tunnels_for_origin_service_stop(
+        &connection,
+        &state,
+        &service_name,
+    )?;
+    Ok(stopped)
 }
 
 #[tauri::command]

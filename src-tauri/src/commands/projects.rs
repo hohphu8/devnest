@@ -1,4 +1,4 @@
-use crate::commands::database;
+use crate::commands::{database, persistent_tunnels};
 use crate::core::scheduled_task_manager;
 use crate::core::worker_manager;
 use crate::core::{config_generator, project_scanner};
@@ -70,6 +70,26 @@ pub fn update_project(
 ) -> Result<Project, AppError> {
     let connection = connection_from_state(&state)?;
     let current = ProjectRepository::get(&connection, &project_id)?;
+    let persistent_route_context_changed = patch
+        .domain
+        .as_ref()
+        .map(|domain| domain.trim().eq_ignore_ascii_case(current.domain.trim()))
+        .map(|same| !same)
+        .unwrap_or(false)
+        || patch
+            .server_type
+            .as_ref()
+            .map(|server_type| server_type.as_str() != current.server_type.as_str())
+            .unwrap_or(false)
+        || patch
+            .document_root
+            .as_ref()
+            .map(|document_root| document_root != &current.document_root)
+            .unwrap_or(false)
+        || patch
+            .ssl_enabled
+            .map(|ssl_enabled| ssl_enabled != current.ssl_enabled)
+            .unwrap_or(false);
     let next_database_name = patch
         .database_name
         .as_ref()
@@ -98,6 +118,13 @@ pub fn update_project(
         remove_project_managed_configs(&state.workspace_dir, &updated.domain)?;
     }
     config_generator::generate_config(&updated, &state.workspace_dir)?;
+    if persistent_route_context_changed {
+        persistent_tunnels::reset_project_persistent_tunnel_after_profile_change(
+            &connection,
+            &state,
+            &updated.id,
+        )?;
+    }
 
     Ok(updated)
 }

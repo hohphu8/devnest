@@ -180,16 +180,7 @@ fn active_persistent_tunnel_project_ids(
     connection: &Connection,
     state: &AppState,
 ) -> Result<Vec<String>, AppError> {
-    let tunnels = state
-        .project_persistent_tunnels
-        .lock()
-        .map_err(|_| mutex_error())?;
-    let mut ids = tunnels
-        .iter()
-        .filter(|(_, tunnel)| !matches!(tunnel.status, PersistentTunnelStatus::Stopped))
-        .map(|(project_id, _)| project_id.clone())
-        .collect::<Vec<_>>();
-    drop(tunnels);
+    let mut ids = tracked_active_persistent_tunnel_project_ids(state)?;
 
     if !detected_shared_persistent_tunnel_pids(state)?.is_empty() {
         let configured_hostnames = configured_persistent_tunnel_hostnames(state);
@@ -214,6 +205,128 @@ fn active_persistent_tunnel_project_ids(
     ids.sort();
     ids.dedup();
     Ok(ids)
+}
+
+fn tracked_active_persistent_tunnel_project_ids(state: &AppState) -> Result<Vec<String>, AppError> {
+    let tunnels = state
+        .project_persistent_tunnels
+        .lock()
+        .map_err(|_| mutex_error())?;
+    let mut ids = tunnels
+        .iter()
+        .filter(|(_, tunnel)| !matches!(tunnel.status, PersistentTunnelStatus::Stopped))
+        .map(|(project_id, _)| project_id.clone())
+        .collect::<Vec<_>>();
+
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+pub(crate) fn reset_persistent_tunnels_for_origin_service_stop(
+    connection: &Connection,
+    state: &AppState,
+    service: &ServiceName,
+) -> Result<(), AppError> {
+    let server_type = match service {
+        ServiceName::Apache => ServerType::Apache,
+        ServiceName::Nginx => ServerType::Nginx,
+        ServiceName::Frankenphp => ServerType::Frankenphp,
+        ServiceName::Mysql | ServiceName::Mailpit | ServiceName::Redis => return Ok(()),
+    };
+    let affected_projects = ProjectRepository::list(connection)?
+        .into_iter()
+        .filter(|project| project.server_type.as_str() == server_type.as_str())
+        .collect::<Vec<_>>();
+
+    if affected_projects.is_empty() {
+        return Ok(());
+    }
+
+    let mut removed_active = false;
+    for project in &affected_projects {
+        let previous = remove_project_persistent_tunnel_state(state, &project.id)?;
+        removed_active |= previous
+            .as_ref()
+            .map(|tunnel| !matches!(tunnel.status, PersistentTunnelStatus::Stopped))
+            .unwrap_or(false);
+    }
+
+    let process_running = !detected_shared_persistent_tunnel_pids(state)?.is_empty();
+    let configured_hostnames = if process_running {
+        configured_persistent_tunnel_hostnames(state)
+    } else {
+        Vec::new()
+    };
+    let mut configured_route_active = false;
+    if process_running && !configured_hostnames.is_empty() {
+        for project in &affected_projects {
+            let Some(hostname) =
+                ProjectPersistentHostnameRepository::get_by_project(connection, &project.id)?
+            else {
+                continue;
+            };
+
+            configured_route_active |= configured_hostnames
+                .iter()
+                .any(|configured| configured.eq_ignore_ascii_case(&hostname.hostname));
+        }
+    }
+
+    if !removed_active && !configured_route_active {
+        return Ok(());
+    }
+
+    let remaining_ids = tracked_active_persistent_tunnel_project_ids(state)?;
+    if remaining_ids.is_empty() {
+        stop_shared_persistent_tunnel_process(state)?;
+    } else {
+        let _ = restart_shared_persistent_tunnel_for_projects(connection, state, &remaining_ids)?;
+    }
+
+    Ok(())
+}
+
+pub(crate) fn reset_project_persistent_tunnel_after_profile_change(
+    connection: &Connection,
+    state: &AppState,
+    project_id: &str,
+) -> Result<(), AppError> {
+    let previous = remove_project_persistent_tunnel_state(state, project_id)?;
+    let was_active = previous
+        .as_ref()
+        .map(|tunnel| !matches!(tunnel.status, PersistentTunnelStatus::Stopped))
+        .unwrap_or(false);
+    let process_running = !detected_shared_persistent_tunnel_pids(state)?.is_empty();
+    let configured_hostnames = if process_running {
+        configured_persistent_tunnel_hostnames(state)
+    } else {
+        Vec::new()
+    };
+    let configured_route_active = if process_running && !configured_hostnames.is_empty() {
+        ProjectPersistentHostnameRepository::get_by_project(connection, project_id)?
+            .map(|hostname| {
+                configured_hostnames
+                    .iter()
+                    .any(|configured| configured.eq_ignore_ascii_case(&hostname.hostname))
+            })
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    if !was_active && !configured_route_active {
+        return Ok(());
+    }
+
+    let remaining_ids = tracked_active_persistent_tunnel_project_ids(state)?;
+    if remaining_ids.is_empty() {
+        stop_shared_persistent_tunnel_process(state)?;
+    } else {
+        let _ = restart_shared_persistent_tunnel_for_projects(connection, state, &remaining_ids)?;
+    }
+
+    Ok(())
 }
 
 fn build_persistent_tunnel_route(
@@ -1534,7 +1647,7 @@ pub(crate) fn start_project_persistent_tunnel_internal(
         &hostname_record.hostname,
         Path::new(&project.path),
     )?;
-    let mut active_ids = active_persistent_tunnel_project_ids(&connection, state)?;
+    let mut active_ids = tracked_active_persistent_tunnel_project_ids(state)?;
     if !active_ids.iter().any(|value| value == project_id) {
         active_ids.push(project_id.to_string());
     }
@@ -1576,7 +1689,7 @@ fn apply_project_persistent_hostname_internal(
     refresh_project_server_aliases(&connection, state, project_id)?;
     ensure_named_tunnel_dns_route(&runtime, &hostname.hostname, Path::new(&project.path))?;
 
-    let mut active_ids = active_persistent_tunnel_project_ids(&connection, state)?;
+    let mut active_ids = tracked_active_persistent_tunnel_project_ids(state)?;
     if !active_ids.iter().any(|value| value == project_id) {
         active_ids.push(project_id.to_string());
     }
@@ -2238,7 +2351,7 @@ pub(crate) fn stop_project_persistent_tunnel_internal(
 ) -> Result<ProjectPersistentTunnelState, AppError> {
     let previous = remove_project_persistent_tunnel_state(state, project_id)?;
     let connection = connection_from_state(&state)?;
-    let mut remaining_ids = active_persistent_tunnel_project_ids(&connection, state)?;
+    let mut remaining_ids = tracked_active_persistent_tunnel_project_ids(state)?;
     remaining_ids.retain(|value| value != project_id);
     if remaining_ids.is_empty() {
         stop_shared_persistent_tunnel_process(state)?;
@@ -2320,7 +2433,7 @@ pub async fn unpublish_project_persistent_tunnel(
                 )
             })?;
 
-        let mut remaining_ids = active_persistent_tunnel_project_ids(&connection, &state)?;
+        let mut remaining_ids = tracked_active_persistent_tunnel_project_ids(&state)?;
         remaining_ids.retain(|value| value != &project_id);
         if remaining_ids.is_empty() {
             stop_shared_persistent_tunnel_process(&state)?;

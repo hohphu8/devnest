@@ -34,7 +34,7 @@ const NAV_ITEMS = [
   { to: "/", label: "Dashboard", hint: "Workspace overview", keywords: "home metrics workspace" },
   { to: "/projects", label: "Projects", hint: "Project-first registry", keywords: "sites apps import" },
   { to: "/recipes", label: "Recipes", hint: "Scaffold or clone", keywords: "laravel wordpress git" },
-  { to: "/services", label: "Services", hint: "Runtime control", keywords: "apache nginx mysql redis mailpit" },
+  { to: "/services", label: "Services", hint: "Runtime control", keywords: "apache nginx frankenphp mysql redis mailpit" },
   { to: "/logs", label: "Logs", hint: "Tail runtime output", keywords: "viewer output errors" },
   { to: "/diagnostics", label: "Diagnostics", hint: "Project health checks", keywords: "issues health checks" },
   { to: "/reliability", label: "Reliability", hint: "Recovery and preflight", keywords: "repair backup restore" },
@@ -55,6 +55,8 @@ function serviceLabel(name: ServiceName) {
       return "Apache";
     case "nginx":
       return "Nginx";
+    case "frankenphp":
+      return "FrankenPHP";
     case "mysql":
       return "MySQL";
     case "mailpit":

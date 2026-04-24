@@ -16,6 +16,18 @@ fn connection_from_state(state: &AppState) -> Result<Connection, AppError> {
     Ok(Connection::open(&state.db_path)?)
 }
 
+fn remove_project_managed_configs(workspace_dir: &Path, domain: &str) -> Result<(), AppError> {
+    for server_type in [
+        ServerType::Apache,
+        ServerType::Nginx,
+        ServerType::Frankenphp,
+    ] {
+        config_generator::remove_managed_config(workspace_dir, &server_type, domain)?;
+    }
+
+    Ok(())
+}
+
 #[derive(serde::Serialize)]
 pub struct DeleteProjectResult {
     pub success: bool,
@@ -79,7 +91,15 @@ pub fn update_project(
         }
     }
 
-    ProjectRepository::update(&connection, &project_id, patch)
+    let updated = ProjectRepository::update(&connection, &project_id, patch)?;
+
+    remove_project_managed_configs(&state.workspace_dir, &current.domain)?;
+    if updated.domain != current.domain {
+        remove_project_managed_configs(&state.workspace_dir, &updated.domain)?;
+    }
+    config_generator::generate_config(&updated, &state.workspace_dir)?;
+
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -104,16 +124,7 @@ pub fn delete_project(
     worker_manager::delete_workers_for_project(&connection, &state, &project_id)?;
     scheduled_task_manager::delete_tasks_for_project(&connection, &state, &project_id)?;
     ProjectRepository::delete(&connection, &project_id)?;
-    config_generator::remove_managed_config(
-        &state.workspace_dir,
-        &ServerType::Apache,
-        &project.domain,
-    )?;
-    config_generator::remove_managed_config(
-        &state.workspace_dir,
-        &ServerType::Nginx,
-        &project.domain,
-    )?;
+    remove_project_managed_configs(&state.workspace_dir, &project.domain)?;
 
     Ok(DeleteProjectResult { success: true })
 }

@@ -1,4 +1,4 @@
-export type ServiceName = "apache" | "nginx" | "mysql" | "mailpit" | "redis";
+export type ServiceName = "apache" | "nginx" | "frankenphp" | "mysql" | "mailpit" | "redis";
 export type ServiceStatus = "running" | "stopped" | "error";
 export type ServiceLogSeverity = "error" | "warning" | "info";
 

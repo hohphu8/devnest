@@ -135,6 +135,7 @@ fn preferred_boot_web_service(connection: &Connection) -> Result<Option<ServiceN
     let service = match project.server_type {
         ServerType::Apache => ServiceName::Apache,
         ServerType::Nginx => ServiceName::Nginx,
+        ServerType::Frankenphp => ServiceName::Frankenphp,
     };
 
     Ok(Some(service))

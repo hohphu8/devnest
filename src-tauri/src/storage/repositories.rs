@@ -620,6 +620,7 @@ impl ServiceRepository {
         for (name, port) in [
             ("apache", 80),
             ("nginx", 80),
+            ("frankenphp", 80),
             ("mysql", 3306),
             ("mailpit", 8025),
             ("redis", 6379),
@@ -890,8 +891,9 @@ impl RuntimeVersionRepository {
                 CASE runtime_type
                     WHEN 'apache' THEN 1
                     WHEN 'nginx' THEN 2
-                    WHEN 'mysql' THEN 3
-                    WHEN 'php' THEN 4
+                    WHEN 'frankenphp' THEN 3
+                    WHEN 'mysql' THEN 4
+                    WHEN 'php' THEN 5
                     ELSE 99
                 END,
                 version ASC
@@ -1319,10 +1321,13 @@ impl PhpExtensionOverrideRepository {
         available_extensions: &[String],
     ) -> Result<Vec<PhpExtensionState>, AppError> {
         let runtime = RuntimeVersionRepository::get_by_id(connection, runtime_id)?;
-        if !matches!(runtime.runtime_type, RuntimeType::Php) {
+        if !matches!(
+            runtime.runtime_type,
+            RuntimeType::Php | RuntimeType::Frankenphp
+        ) {
             return Err(AppError::new_validation(
                 "INVALID_RUNTIME_TYPE",
-                "PHP extensions can only be managed for PHP runtimes.",
+                "PHP extensions can only be managed for PHP or FrankenPHP runtimes.",
             ));
         }
 
@@ -1375,10 +1380,13 @@ impl PhpExtensionOverrideRepository {
         enabled: bool,
     ) -> Result<(), AppError> {
         let runtime = RuntimeVersionRepository::get_by_id(connection, runtime_id)?;
-        if !matches!(runtime.runtime_type, RuntimeType::Php) {
+        if !matches!(
+            runtime.runtime_type,
+            RuntimeType::Php | RuntimeType::Frankenphp
+        ) {
             return Err(AppError::new_validation(
                 "INVALID_RUNTIME_TYPE",
-                "PHP extensions can only be managed for PHP runtimes.",
+                "PHP extensions can only be managed for PHP or FrankenPHP runtimes.",
             ));
         }
 
@@ -1407,10 +1415,13 @@ impl PhpExtensionOverrideRepository {
         extension_name: &str,
     ) -> Result<(), AppError> {
         let runtime = RuntimeVersionRepository::get_by_id(connection, runtime_id)?;
-        if !matches!(runtime.runtime_type, RuntimeType::Php) {
+        if !matches!(
+            runtime.runtime_type,
+            RuntimeType::Php | RuntimeType::Frankenphp
+        ) {
             return Err(AppError::new_validation(
                 "INVALID_RUNTIME_TYPE",
-                "PHP extensions can only be managed for PHP runtimes.",
+                "PHP extensions can only be managed for PHP or FrankenPHP runtimes.",
             ));
         }
 
@@ -1436,10 +1447,13 @@ impl PhpFunctionOverrideRepository {
         managed_functions: &[String],
     ) -> Result<Vec<PhpFunctionState>, AppError> {
         let runtime = RuntimeVersionRepository::get_by_id(connection, runtime_id)?;
-        if !matches!(runtime.runtime_type, RuntimeType::Php) {
+        if !matches!(
+            runtime.runtime_type,
+            RuntimeType::Php | RuntimeType::Frankenphp
+        ) {
             return Err(AppError::new_validation(
                 "INVALID_RUNTIME_TYPE",
-                "PHP functions can only be managed for PHP runtimes.",
+                "PHP functions can only be managed for PHP or FrankenPHP runtimes.",
             ));
         }
 
@@ -1489,10 +1503,13 @@ impl PhpFunctionOverrideRepository {
         enabled: bool,
     ) -> Result<(), AppError> {
         let runtime = RuntimeVersionRepository::get_by_id(connection, runtime_id)?;
-        if !matches!(runtime.runtime_type, RuntimeType::Php) {
+        if !matches!(
+            runtime.runtime_type,
+            RuntimeType::Php | RuntimeType::Frankenphp
+        ) {
             return Err(AppError::new_validation(
                 "INVALID_RUNTIME_TYPE",
-                "PHP functions can only be managed for PHP runtimes.",
+                "PHP functions can only be managed for PHP or FrankenPHP runtimes.",
             ));
         }
 

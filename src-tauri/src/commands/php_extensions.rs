@@ -2,8 +2,8 @@ use crate::core::php_extension_packages;
 use crate::core::runtime_registry;
 use crate::error::AppError;
 use crate::models::runtime::{
-    PhpExtensionInstallResult, PhpExtensionPackage, PhpExtensionState, PhpFunctionState,
-    RuntimeType,
+    PhpExtensionInstallResult, PhpExtensionPackage, PhpExtensionState, PhpExtensionThreadSafety,
+    PhpFunctionState, RuntimeType, RuntimeVersion,
 };
 use crate::state::AppState;
 use crate::storage::repositories::{
@@ -29,9 +29,74 @@ fn php_runtime_home(binary_path: &Path) -> Result<PathBuf, AppError> {
     })
 }
 
-fn available_php_extensions(binary_path: &Path) -> Result<Vec<String>, AppError> {
-    let runtime_home = php_runtime_home(binary_path)?;
-    Ok(runtime_registry::available_php_extensions(&runtime_home))
+struct PhpToolsRuntimeContext {
+    runtime_home: PathBuf,
+    ext_dir: PathBuf,
+    available_extensions: Vec<String>,
+    php_family: String,
+    thread_safety: Option<PhpExtensionThreadSafety>,
+    runtime_label: String,
+}
+
+fn runtime_supports_php_tools(runtime_type: &RuntimeType) -> bool {
+    matches!(runtime_type, RuntimeType::Php | RuntimeType::Frankenphp)
+}
+
+fn php_tools_runtime_context(
+    workspace_dir: &Path,
+    runtime: &RuntimeVersion,
+) -> Result<PhpToolsRuntimeContext, AppError> {
+    let runtime_home = php_runtime_home(Path::new(&runtime.path))?;
+
+    match runtime.runtime_type {
+        RuntimeType::Php => {
+            let php_family = php_version_family(&runtime.version)?;
+            Ok(PhpToolsRuntimeContext {
+                ext_dir: runtime_home.join("ext"),
+                available_extensions: runtime_registry::available_php_extensions(&runtime_home),
+                php_family,
+                thread_safety: None,
+                runtime_label: runtime.version.clone(),
+                runtime_home,
+            })
+        }
+        RuntimeType::Frankenphp => {
+            let php_family =
+                runtime_registry::frankenphp_embedded_php_family(Path::new(&runtime.path))?;
+            Ok(PhpToolsRuntimeContext {
+                ext_dir: runtime_registry::frankenphp_overlay_ext_dir(workspace_dir, &php_family),
+                available_extensions: runtime_registry::frankenphp_available_php_extensions(
+                    &runtime_home,
+                    workspace_dir,
+                    &php_family,
+                ),
+                php_family: php_family.clone(),
+                thread_safety: Some(PhpExtensionThreadSafety::Ts),
+                runtime_label: format!("FrankenPHP {} (PHP {php_family})", runtime.version),
+                runtime_home,
+            })
+        }
+        _ => Err(AppError::new_validation(
+            "INVALID_RUNTIME_TYPE",
+            "PHP tools only support PHP or FrankenPHP runtimes.",
+        )),
+    }
+}
+
+fn extension_missing_message(
+    runtime: &RuntimeVersion,
+    runtime_label: &str,
+    extension_name: &str,
+) -> String {
+    match runtime.runtime_type {
+        RuntimeType::Frankenphp => format!(
+            "{runtime_label} does not expose the `{extension_name}` extension DLL in its bundled or managed ext directories."
+        ),
+        _ => format!(
+            "PHP {} does not expose the `{}` extension DLL in its ext directory.",
+            runtime.version, extension_name
+        ),
+    }
 }
 
 fn php_version_family(version: &str) -> Result<String, AppError> {
@@ -206,19 +271,20 @@ pub fn list_php_extensions(
 ) -> Result<Vec<PhpExtensionState>, AppError> {
     let connection = connection_from_state(&state)?;
     let runtime = RuntimeVersionRepository::get_by_id(&connection, &runtime_id)?;
+    let context = php_tools_runtime_context(&state.workspace_dir, &runtime)?;
 
-    if !matches!(runtime.runtime_type, RuntimeType::Php) {
+    if !runtime_supports_php_tools(&runtime.runtime_type) {
         return Err(AppError::new_validation(
             "INVALID_RUNTIME_TYPE",
-            "PHP extensions can only be managed for PHP runtimes.",
+            "PHP extensions can only be managed for PHP or FrankenPHP runtimes.",
         ));
     }
 
     PhpExtensionOverrideRepository::list_for_runtime(
         &connection,
         &runtime.id,
-        &runtime.version,
-        &available_php_extensions(Path::new(&runtime.path))?,
+        &context.runtime_label,
+        &context.available_extensions,
     )
 }
 
@@ -231,23 +297,24 @@ pub fn set_php_extension_enabled(
 ) -> Result<PhpExtensionState, AppError> {
     let connection = connection_from_state(&state)?;
     let runtime = RuntimeVersionRepository::get_by_id(&connection, &runtime_id)?;
+    let context = php_tools_runtime_context(&state.workspace_dir, &runtime)?;
 
-    if !matches!(runtime.runtime_type, RuntimeType::Php) {
+    if !runtime_supports_php_tools(&runtime.runtime_type) {
         return Err(AppError::new_validation(
             "INVALID_RUNTIME_TYPE",
-            "PHP extensions can only be managed for PHP runtimes.",
+            "PHP extensions can only be managed for PHP or FrankenPHP runtimes.",
         ));
     }
 
     let normalized_extension = extension_name.trim().to_ascii_lowercase();
-    let available = available_php_extensions(Path::new(&runtime.path))?;
-    if !available.iter().any(|item| item == &normalized_extension) {
+    if !context
+        .available_extensions
+        .iter()
+        .any(|item| item == &normalized_extension)
+    {
         return Err(AppError::new_validation(
             "PHP_EXTENSION_NOT_AVAILABLE",
-            format!(
-                "PHP {} does not expose the `{}` extension DLL in its ext directory.",
-                runtime.version, normalized_extension
-            ),
+            extension_missing_message(&runtime, &context.runtime_label, &normalized_extension),
         ));
     }
 
@@ -261,8 +328,8 @@ pub fn set_php_extension_enabled(
     PhpExtensionOverrideRepository::list_for_runtime(
         &connection,
         &runtime.id,
-        &runtime.version,
-        &available,
+        &context.runtime_label,
+        &context.available_extensions,
     )?
     .into_iter()
     .find(|item| item.extension_name == normalized_extension)
@@ -281,11 +348,12 @@ pub fn install_php_extension(
 ) -> Result<Option<PhpExtensionInstallResult>, AppError> {
     let connection = connection_from_state(&state)?;
     let runtime = RuntimeVersionRepository::get_by_id(&connection, &runtime_id)?;
+    let context = php_tools_runtime_context(&state.workspace_dir, &runtime)?;
 
-    if !matches!(runtime.runtime_type, RuntimeType::Php) {
+    if !runtime_supports_php_tools(&runtime.runtime_type) {
         return Err(AppError::new_validation(
             "INVALID_RUNTIME_TYPE",
-            "PHP extensions can only be installed for PHP runtimes.",
+            "PHP extensions can only be installed for PHP or FrankenPHP runtimes.",
         ));
     }
 
@@ -293,8 +361,6 @@ pub fn install_php_extension(
         return Ok(None);
     };
 
-    let runtime_home = php_runtime_home(Path::new(&runtime.path))?;
-    let ext_dir = runtime_home.join("ext");
     let source_name = source_path
         .file_name()
         .and_then(|value| value.to_str())
@@ -302,14 +368,14 @@ pub fn install_php_extension(
         .to_ascii_lowercase();
 
     let installed_extensions = if source_name.ends_with(".zip") {
-        install_extension_archive(&source_path, &ext_dir)?
+        install_extension_archive(&source_path, &context.ext_dir)?
     } else {
-        vec![install_extension_dll(&source_path, &ext_dir)?]
+        vec![install_extension_dll(&source_path, &context.ext_dir)?]
     };
 
     Ok(Some(PhpExtensionInstallResult {
         runtime_id: runtime.id,
-        runtime_version: runtime.version,
+        runtime_version: context.runtime_label,
         installed_extensions,
         source_path: source_path.to_string_lossy().to_string(),
     }))
@@ -322,17 +388,19 @@ pub fn list_php_extension_packages(
 ) -> Result<Vec<PhpExtensionPackage>, AppError> {
     let connection = connection_from_state(&state)?;
     let runtime = RuntimeVersionRepository::get_by_id(&connection, &runtime_id)?;
+    let context = php_tools_runtime_context(&state.workspace_dir, &runtime)?;
 
-    if !matches!(runtime.runtime_type, RuntimeType::Php) {
+    if !runtime_supports_php_tools(&runtime.runtime_type) {
         return Err(AppError::new_validation(
             "INVALID_RUNTIME_TYPE",
-            "PHP extension packages can only be listed for PHP runtimes.",
+            "PHP extension packages can only be listed for PHP or FrankenPHP runtimes.",
         ));
     }
 
     php_extension_packages::list_php_extension_packages(
         &state.resources_dir,
-        &php_version_family(&runtime.version)?,
+        &context.php_family,
+        context.thread_safety.as_ref(),
     )
 }
 
@@ -350,17 +418,19 @@ pub async fn install_php_extension_package(
     tauri::async_runtime::spawn_blocking(move || {
         let connection = Connection::open(&db_path)?;
         let runtime = RuntimeVersionRepository::get_by_id(&connection, &runtime_id)?;
+        let context = php_tools_runtime_context(&workspace_dir, &runtime)?;
 
-        if !matches!(runtime.runtime_type, RuntimeType::Php) {
+        if !runtime_supports_php_tools(&runtime.runtime_type) {
             return Err(AppError::new_validation(
                 "INVALID_RUNTIME_TYPE",
-                "PHP extension packages can only be installed for PHP runtimes.",
+                "PHP extension packages can only be installed for PHP or FrankenPHP runtimes.",
             ));
         }
 
         let package = php_extension_packages::list_php_extension_packages(
             &resources_dir,
-            &php_version_family(&runtime.version)?,
+            &context.php_family,
+            context.thread_safety.as_ref(),
         )?
         .into_iter()
         .find(|item| item.id == package_id)
@@ -378,17 +448,15 @@ pub async fn install_php_extension_package(
             package.checksum_sha256.as_deref(),
         )?;
 
-        let runtime_home = php_runtime_home(Path::new(&runtime.path))?;
-        let ext_dir = runtime_home.join("ext");
         let installed_extensions = php_extension_packages::install_php_extension_package(
             &package,
             &archive_path,
-            &ext_dir,
+            &context.ext_dir,
         )?;
 
         Ok::<PhpExtensionInstallResult, AppError>(PhpExtensionInstallResult {
             runtime_id: runtime.id,
-            runtime_version: runtime.version,
+            runtime_version: context.runtime_label,
             installed_extensions,
             source_path: archive_path.to_string_lossy().to_string(),
         })
@@ -411,11 +479,12 @@ pub fn remove_php_extension(
 ) -> Result<bool, AppError> {
     let connection = connection_from_state(&state)?;
     let runtime = RuntimeVersionRepository::get_by_id(&connection, &runtime_id)?;
+    let context = php_tools_runtime_context(&state.workspace_dir, &runtime)?;
 
-    if !matches!(runtime.runtime_type, RuntimeType::Php) {
+    if !runtime_supports_php_tools(&runtime.runtime_type) {
         return Err(AppError::new_validation(
             "INVALID_RUNTIME_TYPE",
-            "PHP extensions can only be removed for PHP runtimes.",
+            "PHP extensions can only be removed for PHP or FrankenPHP runtimes.",
         ));
     }
 
@@ -426,18 +495,27 @@ pub fn remove_php_extension(
                 "The selected PHP extension name is not valid.",
             )
         })?;
-    let runtime_home = php_runtime_home(Path::new(&runtime.path))?;
-    let extension_path = runtime_home
-        .join("ext")
+    let extension_path = context
+        .ext_dir
         .join(format!("php_{normalized_extension}.dll"));
 
     if !extension_path.exists() {
+        if matches!(runtime.runtime_type, RuntimeType::Frankenphp)
+            && context
+                .runtime_home
+                .join("ext")
+                .join(format!("php_{normalized_extension}.dll"))
+                .exists()
+        {
+            return Err(AppError::new_validation(
+                "PHP_EXTENSION_REMOVE_UNSUPPORTED",
+                "Bundled FrankenPHP extension DLLs cannot be uninstalled. Disable the extension instead, or remove only DLLs imported into the managed FrankenPHP overlay.",
+            ));
+        }
+
         return Err(AppError::new_validation(
             "PHP_EXTENSION_NOT_AVAILABLE",
-            format!(
-                "PHP {} does not expose the `{}` extension DLL in its ext directory.",
-                runtime.version, normalized_extension
-            ),
+            extension_missing_message(&runtime, &context.runtime_label, &normalized_extension),
         ));
     }
 
@@ -460,18 +538,19 @@ pub fn list_php_functions(
 ) -> Result<Vec<PhpFunctionState>, AppError> {
     let connection = connection_from_state(&state)?;
     let runtime = RuntimeVersionRepository::get_by_id(&connection, &runtime_id)?;
+    let context = php_tools_runtime_context(&state.workspace_dir, &runtime)?;
 
-    if !matches!(runtime.runtime_type, RuntimeType::Php) {
+    if !runtime_supports_php_tools(&runtime.runtime_type) {
         return Err(AppError::new_validation(
             "INVALID_RUNTIME_TYPE",
-            "PHP functions can only be managed for PHP runtimes.",
+            "PHP functions can only be managed for PHP or FrankenPHP runtimes.",
         ));
     }
 
     PhpFunctionOverrideRepository::list_for_runtime(
         &connection,
         &runtime.id,
-        &runtime.version,
+        &context.runtime_label,
         &runtime_registry::managed_php_functions(),
     )
 }
@@ -485,11 +564,12 @@ pub fn set_php_function_enabled(
 ) -> Result<PhpFunctionState, AppError> {
     let connection = connection_from_state(&state)?;
     let runtime = RuntimeVersionRepository::get_by_id(&connection, &runtime_id)?;
+    let context = php_tools_runtime_context(&state.workspace_dir, &runtime)?;
 
-    if !matches!(runtime.runtime_type, RuntimeType::Php) {
+    if !runtime_supports_php_tools(&runtime.runtime_type) {
         return Err(AppError::new_validation(
             "INVALID_RUNTIME_TYPE",
-            "PHP functions can only be managed for PHP runtimes.",
+            "PHP functions can only be managed for PHP or FrankenPHP runtimes.",
         ));
     }
 
@@ -518,7 +598,7 @@ pub fn set_php_function_enabled(
     PhpFunctionOverrideRepository::list_for_runtime(
         &connection,
         &runtime.id,
-        &runtime.version,
+        &context.runtime_label,
         &managed_functions,
     )?
     .into_iter()

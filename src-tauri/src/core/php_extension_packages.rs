@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::models::runtime::{
     PhpExtensionPackage, PhpExtensionPackageKind, PhpExtensionPackageManifest,
+    PhpExtensionThreadSafety,
 };
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
@@ -70,6 +71,7 @@ pub fn php_extension_manifest_path(resources_dir: &Path) -> Option<PathBuf> {
 pub fn list_php_extension_packages(
     resources_dir: &Path,
     php_family: &str,
+    thread_safety: Option<&PhpExtensionThreadSafety>,
 ) -> Result<Vec<PhpExtensionPackage>, AppError> {
     let manifest_path = php_extension_manifest_path(resources_dir).ok_or_else(|| {
         AppError::new_validation(
@@ -102,6 +104,14 @@ pub fn list_php_extension_packages(
             package.platform.eq_ignore_ascii_case(current_platform())
                 && package.arch.eq_ignore_ascii_case(current_arch())
                 && package.php_family == php_family
+                && match thread_safety {
+                    Some(required) => package.thread_safety.as_ref() == Some(required),
+                    None => package
+                        .thread_safety
+                        .as_ref()
+                        .map(|value| matches!(value, PhpExtensionThreadSafety::Nts))
+                        .unwrap_or(true),
+                }
         })
         .collect())
 }

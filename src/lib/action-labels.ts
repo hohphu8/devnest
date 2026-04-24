@@ -6,6 +6,8 @@ function serviceLabel(name: ServiceName): string {
       return "Apache";
     case "nginx":
       return "Nginx";
+    case "frankenphp":
+      return "FrankenPHP";
     case "mysql":
       return "MySQL";
     case "mailpit":

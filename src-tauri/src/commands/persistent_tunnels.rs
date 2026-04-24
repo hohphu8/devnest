@@ -47,6 +47,7 @@ fn project_server_service_name(server_type: &ServerType) -> ServiceName {
     match server_type {
         ServerType::Apache => ServiceName::Apache,
         ServerType::Nginx => ServiceName::Nginx,
+        ServerType::Frankenphp => ServiceName::Frankenphp,
     }
 }
 
@@ -2457,7 +2458,7 @@ pub fn inspect_project_persistent_tunnel_health(
             PersistentTunnelStatus::Error
         },
         message: if alias_synced {
-            "Managed Apache or Nginx config includes the stable hostname.".to_string()
+            "Managed Apache, Nginx, or FrankenPHP config includes the stable hostname.".to_string()
         } else {
             "Managed config does not currently include the reserved hostname alias.".to_string()
         },

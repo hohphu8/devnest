@@ -88,6 +88,15 @@ fn to_inventory_item(
             runtime.path
         ))
     };
+    let php_family = if path_exists
+        && matches!(
+            runtime.runtime_type,
+            crate::models::runtime::RuntimeType::Frankenphp
+        ) {
+        runtime_registry::frankenphp_embedded_php_family(runtime_path).ok()
+    } else {
+        None
+    };
 
     RuntimeInventoryItem {
         id: runtime.id,
@@ -101,6 +110,7 @@ fn to_inventory_item(
         } else {
             RuntimeHealthStatus::Missing
         },
+        php_family,
         created_at: runtime.created_at,
         updated_at: runtime.updated_at,
         details,
@@ -252,7 +262,7 @@ fn parse_runtime_type(value: &str) -> Result<crate::models::runtime::RuntimeType
     crate::models::runtime::RuntimeType::from_str(value).map_err(|_| {
         AppError::new_validation(
             "INVALID_RUNTIME_TYPE",
-            "Runtime type must be one of php, apache, nginx, or mysql.",
+            "Runtime type must be one of php, apache, nginx, frankenphp, or mysql.",
         )
     })
 }
@@ -267,6 +277,14 @@ pub fn verify_runtime_path(
     let version =
         runtime_registry::verify_runtime_binary(&runtime_type, Path::new(&normalized_path))?;
     let timestamp = now_iso()?;
+    let php_family = if matches!(
+        runtime_type,
+        crate::models::runtime::RuntimeType::Frankenphp
+    ) {
+        runtime_registry::frankenphp_embedded_php_family(Path::new(&normalized_path)).ok()
+    } else {
+        None
+    };
 
     Ok(RuntimeInventoryItem {
         id: format!("{}-{version}", runtime_type.as_str()),
@@ -276,6 +294,7 @@ pub fn verify_runtime_path(
         is_active: false,
         source: RuntimeSource::External,
         status: RuntimeHealthStatus::Available,
+        php_family,
         created_at: timestamp.clone(),
         updated_at: timestamp,
         details: Some("Runtime binary verified successfully.".to_string()),
@@ -294,9 +313,9 @@ fn runtime_home_from_binary(
     })?;
 
     let runtime_home = match runtime_type {
-        crate::models::runtime::RuntimeType::Php | crate::models::runtime::RuntimeType::Nginx => {
-            binary_dir.to_path_buf()
-        }
+        crate::models::runtime::RuntimeType::Php
+        | crate::models::runtime::RuntimeType::Nginx
+        | crate::models::runtime::RuntimeType::Frankenphp => binary_dir.to_path_buf(),
         crate::models::runtime::RuntimeType::Apache
         | crate::models::runtime::RuntimeType::Mysql => {
             if binary_dir
@@ -373,6 +392,9 @@ fn dependency_guard_message(
             runtime.runtime_type.as_str(),
             runtime.runtime_type.as_str()
         ),
+        crate::models::runtime::RuntimeType::Frankenphp => {
+            "The active FrankenPHP runtime is still needed by tracked FrankenPHP projects. Set another FrankenPHP runtime active before removing this one.".to_string()
+        }
         crate::models::runtime::RuntimeType::Mysql => {
             "The active MySQL runtime is still needed by tracked database projects. Set another MySQL runtime active before removing this one.".to_string()
         }
@@ -398,13 +420,15 @@ fn guard_runtime_removal(
             .map(|project| format!("{} ({})", project.name, project.domain))
             .collect::<Vec<_>>(),
         crate::models::runtime::RuntimeType::Apache
-        | crate::models::runtime::RuntimeType::Nginx => {
+        | crate::models::runtime::RuntimeType::Nginx
+        | crate::models::runtime::RuntimeType::Frankenphp => {
             if !runtime.is_active {
                 Vec::new()
             } else {
                 let server_type = match runtime.runtime_type {
                     crate::models::runtime::RuntimeType::Apache => ServerType::Apache,
                     crate::models::runtime::RuntimeType::Nginx => ServerType::Nginx,
+                    crate::models::runtime::RuntimeType::Frankenphp => ServerType::Frankenphp,
                     _ => unreachable!(),
                 };
 
@@ -415,6 +439,7 @@ fn guard_runtime_removal(
                             (&project.server_type, &server_type),
                             (ServerType::Apache, ServerType::Apache)
                                 | (ServerType::Nginx, ServerType::Nginx)
+                                | (ServerType::Frankenphp, ServerType::Frankenphp)
                         )
                     })
                     .map(|project| format!("{} ({})", project.name, project.domain))

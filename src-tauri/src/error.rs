@@ -52,7 +52,7 @@ impl From<rusqlite::Error> for AppError {
     fn from(value: rusqlite::Error) -> Self {
         Self::with_details(
             "SQLITE_ERROR",
-            "SQLite bootstrap failed.",
+            "DevNest metadata database operation failed.",
             value.to_string(),
         )
     }

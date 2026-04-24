@@ -89,7 +89,9 @@ export function RuntimeConfigDialog({
                 ? `Manage generated php.ini values for PHP ${runtime.version}.`
                 : runtime.runtimeType === "mysql"
                   ? `Open the managed MySQL config file for ${runtime.version}.`
-                  : `Manage generated ${runtime.runtimeType === "apache" ? "Apache" : "Nginx"} bootstrap settings for ${runtime.version}.`}
+                  : runtime.runtimeType === "frankenphp"
+                    ? `Open the managed FrankenPHP Caddyfile for ${runtime.version}. Structured editing is not available yet.`
+                    : `Manage generated ${runtime.runtimeType === "apache" ? "Apache" : "Nginx"} bootstrap settings for ${runtime.version}.`}
             </p>
           </div>
           <div className="runtime-table-actions">

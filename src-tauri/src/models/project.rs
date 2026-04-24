@@ -6,6 +6,7 @@ use std::str::FromStr;
 pub enum ServerType {
     Apache,
     Nginx,
+    Frankenphp,
 }
 
 impl ServerType {
@@ -13,6 +14,7 @@ impl ServerType {
         match self {
             Self::Apache => "apache",
             Self::Nginx => "nginx",
+            Self::Frankenphp => "frankenphp",
         }
     }
 }
@@ -24,6 +26,7 @@ impl FromStr for ServerType {
         match value {
             "apache" => Ok(Self::Apache),
             "nginx" => Ok(Self::Nginx),
+            "frankenphp" => Ok(Self::Frankenphp),
             _ => Err("Invalid server type"),
         }
     }

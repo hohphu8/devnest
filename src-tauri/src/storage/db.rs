@@ -25,7 +25,7 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
           name TEXT NOT NULL,
           path TEXT NOT NULL UNIQUE,
           domain TEXT NOT NULL UNIQUE,
-          server_type TEXT NOT NULL CHECK(server_type IN ('apache', 'nginx')),
+          server_type TEXT NOT NULL CHECK(server_type IN ('apache', 'nginx', 'frankenphp')),
           php_version TEXT NOT NULL,
           framework TEXT NOT NULL CHECK(framework IN ('laravel', 'wordpress', 'php', 'unknown')),
           document_root TEXT NOT NULL,
@@ -72,7 +72,7 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
 
         CREATE TABLE IF NOT EXISTS runtime_versions (
           id TEXT PRIMARY KEY NOT NULL,
-          runtime_type TEXT NOT NULL CHECK(runtime_type IN ('php', 'apache', 'nginx', 'mysql')),
+          runtime_type TEXT NOT NULL CHECK(runtime_type IN ('php', 'apache', 'nginx', 'frankenphp', 'mysql')),
           version TEXT NOT NULL,
           path TEXT NOT NULL,
           is_active INTEGER NOT NULL DEFAULT 0,
@@ -81,7 +81,7 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
         );
 
         CREATE TABLE IF NOT EXISTS runtime_suppressions (
-          runtime_type TEXT NOT NULL CHECK(runtime_type IN ('php', 'apache', 'nginx', 'mysql')),
+          runtime_type TEXT NOT NULL CHECK(runtime_type IN ('php', 'apache', 'nginx', 'frankenphp', 'mysql')),
           path_key TEXT NOT NULL,
           created_at TEXT NOT NULL,
           PRIMARY KEY (runtime_type, path_key)
@@ -233,6 +233,8 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
     migrate_runtime_config_overrides(&connection)?;
     migrate_project_workers(&connection)?;
     migrate_project_scheduled_tasks(&connection)?;
+    migrate_frankenphp_runtime_support(&connection)?;
+    migrate_repair_project_foreign_keys(&connection)?;
     ServiceRepository::seed_defaults(&connection)?;
 
     Ok(())
@@ -259,6 +261,27 @@ fn record_migration(connection: &Connection, version: &str) -> Result<(), AppErr
     )?;
 
     Ok(())
+}
+
+fn table_sql_contains(
+    connection: &Connection,
+    table_name: &str,
+    needle: &str,
+) -> Result<bool, AppError> {
+    Ok(connection
+        .query_row(
+            "
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = ?1
+            ",
+            [table_name],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .as_deref()
+        .map(|sql| sql.contains(needle))
+        .unwrap_or(false))
 }
 
 fn migrate_optional_tool_versions_for_phpmyadmin(connection: &Connection) -> Result<(), AppError> {
@@ -515,6 +538,378 @@ fn migrate_project_scheduled_tasks(connection: &Connection) -> Result<(), AppErr
         VALUES (?1, CURRENT_TIMESTAMP)
         ",
         params![MIGRATION],
+    )?;
+
+    Ok(())
+}
+
+fn migrate_frankenphp_runtime_support(connection: &Connection) -> Result<(), AppError> {
+    const MIGRATION: &str = "0007_frankenphp_runtime_support";
+    if migration_applied(connection, MIGRATION)? {
+        return Ok(());
+    }
+
+    let projects_sql = connection
+        .query_row(
+            "
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'projects'
+            ",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let runtimes_sql = connection
+        .query_row(
+            "
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'runtime_versions'
+            ",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let suppressions_sql = connection
+        .query_row(
+            "
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'runtime_suppressions'
+            ",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    let already_supported = projects_sql
+        .as_deref()
+        .map(|sql| sql.contains("'frankenphp'"))
+        .unwrap_or(false)
+        && runtimes_sql
+            .as_deref()
+            .map(|sql| sql.contains("'frankenphp'"))
+            .unwrap_or(false)
+        && suppressions_sql
+            .as_deref()
+            .map(|sql| sql.contains("'frankenphp'"))
+            .unwrap_or(false);
+
+    if !already_supported {
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(
+            "
+            ALTER TABLE projects RENAME TO projects_legacy;
+
+            CREATE TABLE projects (
+              id TEXT PRIMARY KEY NOT NULL,
+              name TEXT NOT NULL,
+              path TEXT NOT NULL UNIQUE,
+              domain TEXT NOT NULL UNIQUE,
+              server_type TEXT NOT NULL CHECK(server_type IN ('apache', 'nginx', 'frankenphp')),
+              php_version TEXT NOT NULL,
+              framework TEXT NOT NULL CHECK(framework IN ('laravel', 'wordpress', 'php', 'unknown')),
+              document_root TEXT NOT NULL,
+              ssl_enabled INTEGER NOT NULL DEFAULT 0,
+              database_name TEXT,
+              database_port INTEGER,
+              status TEXT NOT NULL DEFAULT 'stopped' CHECK(status IN ('running', 'stopped', 'error')),
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            INSERT INTO projects (
+              id, name, path, domain, server_type, php_version, framework, document_root,
+              ssl_enabled, database_name, database_port, status, created_at, updated_at
+            )
+            SELECT
+              id, name, path, domain, server_type, php_version, framework, document_root,
+              ssl_enabled, database_name, database_port, status, created_at, updated_at
+            FROM projects_legacy;
+
+            DROP TABLE projects_legacy;
+            CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path);
+            CREATE INDEX IF NOT EXISTS idx_projects_domain ON projects(domain);
+
+            ALTER TABLE runtime_versions RENAME TO runtime_versions_legacy;
+
+            CREATE TABLE runtime_versions (
+              id TEXT PRIMARY KEY NOT NULL,
+              runtime_type TEXT NOT NULL CHECK(runtime_type IN ('php', 'apache', 'nginx', 'frankenphp', 'mysql')),
+              version TEXT NOT NULL,
+              path TEXT NOT NULL,
+              is_active INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            INSERT INTO runtime_versions (id, runtime_type, version, path, is_active, created_at, updated_at)
+            SELECT id, runtime_type, version, path, is_active, created_at, updated_at
+            FROM runtime_versions_legacy;
+
+            DROP TABLE runtime_versions_legacy;
+            CREATE INDEX IF NOT EXISTS idx_runtime_versions_runtime_type ON runtime_versions(runtime_type);
+
+            ALTER TABLE runtime_suppressions RENAME TO runtime_suppressions_legacy;
+
+            CREATE TABLE runtime_suppressions (
+              runtime_type TEXT NOT NULL CHECK(runtime_type IN ('php', 'apache', 'nginx', 'frankenphp', 'mysql')),
+              path_key TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (runtime_type, path_key)
+            );
+
+            INSERT INTO runtime_suppressions (runtime_type, path_key, created_at)
+            SELECT runtime_type, path_key, created_at
+            FROM runtime_suppressions_legacy;
+
+            DROP TABLE runtime_suppressions_legacy;
+            CREATE INDEX IF NOT EXISTS idx_runtime_suppressions_runtime_type ON runtime_suppressions(runtime_type);
+            ",
+        )?;
+        transaction.execute(
+            "
+            INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+            VALUES (?1, CURRENT_TIMESTAMP)
+            ",
+            params![MIGRATION],
+        )?;
+        transaction.commit()?;
+    } else {
+        record_migration(connection, MIGRATION)?;
+    }
+
+    connection.execute(
+        "
+        INSERT OR IGNORE INTO services (
+          name, enabled, auto_start, port, pid, status, last_error, updated_at
+        )
+        VALUES ('frankenphp', 1, 0, 80, NULL, 'stopped', NULL, CURRENT_TIMESTAMP)
+        ",
+        [],
+    )?;
+
+    Ok(())
+}
+
+fn migrate_repair_project_foreign_keys(connection: &Connection) -> Result<(), AppError> {
+    const MIGRATION: &str = "0008_repair_project_foreign_keys";
+    if migration_applied(connection, MIGRATION)? {
+        return Ok(());
+    }
+
+    let affected_tables = [
+        "project_env_vars",
+        "diagnostic_reports",
+        "project_persistent_hostnames",
+        "project_workers",
+        "project_scheduled_tasks",
+        "project_scheduled_task_runs",
+    ];
+    let needs_repair = affected_tables
+        .iter()
+        .map(|table| table_sql_contains(connection, table, "projects_legacy"))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .any(|affected| affected);
+
+    if !needs_repair {
+        return record_migration(connection, MIGRATION);
+    }
+
+    connection.execute_batch(
+        "
+        PRAGMA foreign_keys = OFF;
+
+        BEGIN;
+
+        ALTER TABLE project_env_vars RENAME TO project_env_vars_fk_repair_legacy;
+        CREATE TABLE project_env_vars (
+          id TEXT PRIMARY KEY NOT NULL,
+          project_id TEXT NOT NULL,
+          env_key TEXT NOT NULL,
+          env_value TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        INSERT INTO project_env_vars (id, project_id, env_key, env_value, created_at, updated_at)
+        SELECT id, project_id, env_key, env_value, created_at, updated_at
+        FROM project_env_vars_fk_repair_legacy;
+        DROP TABLE project_env_vars_fk_repair_legacy;
+        CREATE INDEX IF NOT EXISTS idx_project_env_vars_project_id
+        ON project_env_vars(project_id);
+
+        ALTER TABLE diagnostic_reports RENAME TO diagnostic_reports_fk_repair_legacy;
+        CREATE TABLE diagnostic_reports (
+          id TEXT PRIMARY KEY NOT NULL,
+          project_id TEXT NOT NULL,
+          level TEXT NOT NULL CHECK(level IN ('info', 'warning', 'error')),
+          code TEXT NOT NULL,
+          title TEXT NOT NULL,
+          message TEXT NOT NULL,
+          suggestion TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        INSERT INTO diagnostic_reports (
+          id, project_id, level, code, title, message, suggestion, created_at
+        )
+        SELECT id, project_id, level, code, title, message, suggestion, created_at
+        FROM diagnostic_reports_fk_repair_legacy;
+        DROP TABLE diagnostic_reports_fk_repair_legacy;
+        CREATE INDEX IF NOT EXISTS idx_diagnostic_reports_project_id
+        ON diagnostic_reports(project_id);
+
+        ALTER TABLE project_persistent_hostnames RENAME TO project_persistent_hostnames_fk_repair_legacy;
+        CREATE TABLE project_persistent_hostnames (
+          id TEXT PRIMARY KEY NOT NULL,
+          project_id TEXT NOT NULL UNIQUE,
+          provider TEXT NOT NULL CHECK(provider IN ('cloudflared')),
+          hostname TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        INSERT INTO project_persistent_hostnames (
+          id, project_id, provider, hostname, created_at, updated_at
+        )
+        SELECT id, project_id, provider, hostname, created_at, updated_at
+        FROM project_persistent_hostnames_fk_repair_legacy;
+        DROP TABLE project_persistent_hostnames_fk_repair_legacy;
+        CREATE INDEX IF NOT EXISTS idx_project_persistent_hostnames_project_id
+        ON project_persistent_hostnames(project_id);
+        CREATE INDEX IF NOT EXISTS idx_project_persistent_hostnames_hostname
+        ON project_persistent_hostnames(hostname);
+
+        ALTER TABLE project_workers RENAME TO project_workers_fk_repair_legacy;
+        CREATE TABLE project_workers (
+          id TEXT PRIMARY KEY NOT NULL,
+          project_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          preset_type TEXT NOT NULL CHECK(preset_type IN ('queue', 'schedule', 'custom')),
+          command TEXT NOT NULL,
+          args_json TEXT NOT NULL,
+          working_directory TEXT NOT NULL,
+          auto_start INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'stopped' CHECK(status IN ('running', 'stopped', 'error', 'starting', 'restarting')),
+          pid INTEGER,
+          last_started_at TEXT,
+          last_stopped_at TEXT,
+          last_exit_code INTEGER,
+          last_error TEXT,
+          log_path TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        INSERT INTO project_workers (
+          id, project_id, name, preset_type, command, args_json, working_directory,
+          auto_start, status, pid, last_started_at, last_stopped_at, last_exit_code,
+          last_error, log_path, created_at, updated_at
+        )
+        SELECT
+          id, project_id, name, preset_type, command, args_json, working_directory,
+          auto_start, status, pid, last_started_at, last_stopped_at, last_exit_code,
+          last_error, log_path, created_at, updated_at
+        FROM project_workers_fk_repair_legacy;
+        DROP TABLE project_workers_fk_repair_legacy;
+        CREATE INDEX IF NOT EXISTS idx_project_workers_project_id
+        ON project_workers(project_id);
+        CREATE INDEX IF NOT EXISTS idx_project_workers_status
+        ON project_workers(status);
+        CREATE INDEX IF NOT EXISTS idx_project_workers_auto_start
+        ON project_workers(auto_start);
+
+        ALTER TABLE project_scheduled_tasks RENAME TO project_scheduled_tasks_fk_repair_legacy;
+        CREATE TABLE project_scheduled_tasks (
+          id TEXT PRIMARY KEY NOT NULL,
+          project_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          task_type TEXT NOT NULL CHECK(task_type IN ('command', 'url')),
+          schedule_mode TEXT NOT NULL CHECK(schedule_mode IN ('simple', 'cron')),
+          simple_schedule_kind TEXT CHECK(simple_schedule_kind IN ('everySeconds', 'everyMinutes', 'everyHours', 'daily', 'weekly')),
+          schedule_expression TEXT NOT NULL,
+          interval_seconds INTEGER,
+          daily_time TEXT,
+          weekly_day INTEGER,
+          url TEXT,
+          command TEXT,
+          args_json TEXT NOT NULL,
+          working_directory TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          auto_resume INTEGER NOT NULL DEFAULT 1,
+          overlap_policy TEXT NOT NULL DEFAULT 'skip_if_running' CHECK(overlap_policy IN ('skip_if_running')),
+          status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle', 'scheduled', 'running', 'success', 'error', 'skipped')),
+          next_run_at TEXT,
+          last_run_at TEXT,
+          last_success_at TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        INSERT INTO project_scheduled_tasks (
+          id, project_id, name, task_type, schedule_mode, simple_schedule_kind,
+          schedule_expression, interval_seconds, daily_time, weekly_day, url,
+          command, args_json, working_directory, enabled, auto_resume,
+          overlap_policy, status, next_run_at, last_run_at, last_success_at,
+          last_error, created_at, updated_at
+        )
+        SELECT
+          id, project_id, name, task_type, schedule_mode, simple_schedule_kind,
+          schedule_expression, interval_seconds, daily_time, weekly_day, url,
+          command, args_json, working_directory, enabled, auto_resume,
+          overlap_policy, status, next_run_at, last_run_at, last_success_at,
+          last_error, created_at, updated_at
+        FROM project_scheduled_tasks_fk_repair_legacy;
+        DROP TABLE project_scheduled_tasks_fk_repair_legacy;
+        CREATE INDEX IF NOT EXISTS idx_project_scheduled_tasks_project_id
+        ON project_scheduled_tasks(project_id);
+        CREATE INDEX IF NOT EXISTS idx_project_scheduled_tasks_enabled
+        ON project_scheduled_tasks(enabled);
+        CREATE INDEX IF NOT EXISTS idx_project_scheduled_tasks_next_run_at
+        ON project_scheduled_tasks(next_run_at);
+
+        ALTER TABLE project_scheduled_task_runs RENAME TO project_scheduled_task_runs_fk_repair_legacy;
+        CREATE TABLE project_scheduled_task_runs (
+          id TEXT PRIMARY KEY NOT NULL,
+          task_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          duration_ms INTEGER,
+          status TEXT NOT NULL CHECK(status IN ('running', 'success', 'error', 'skipped')),
+          exit_code INTEGER,
+          response_status INTEGER,
+          error_message TEXT,
+          log_path TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES project_scheduled_tasks(id) ON DELETE CASCADE,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        INSERT INTO project_scheduled_task_runs (
+          id, task_id, project_id, started_at, finished_at, duration_ms,
+          status, exit_code, response_status, error_message, log_path, created_at
+        )
+        SELECT
+          id, task_id, project_id, started_at, finished_at, duration_ms,
+          status, exit_code, response_status, error_message, log_path, created_at
+        FROM project_scheduled_task_runs_fk_repair_legacy;
+        DROP TABLE project_scheduled_task_runs_fk_repair_legacy;
+        CREATE INDEX IF NOT EXISTS idx_project_scheduled_task_runs_task_id
+        ON project_scheduled_task_runs(task_id);
+        CREATE INDEX IF NOT EXISTS idx_project_scheduled_task_runs_project_id
+        ON project_scheduled_task_runs(project_id);
+
+        INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+        VALUES ('0008_repair_project_foreign_keys', CURRENT_TIMESTAMP);
+
+        COMMIT;
+
+        PRAGMA foreign_keys = ON;
+        ",
     )?;
 
     Ok(())

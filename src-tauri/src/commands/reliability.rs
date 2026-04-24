@@ -27,6 +27,7 @@ fn server_service_for_project(project: &crate::models::project::Project) -> Serv
     match project.server_type {
         crate::models::project::ServerType::Apache => ServiceName::Apache,
         crate::models::project::ServerType::Nginx => ServiceName::Nginx,
+        crate::models::project::ServerType::Frankenphp => ServiceName::Frankenphp,
     }
 }
 
@@ -34,6 +35,7 @@ fn project_server_runtime_type(project: &crate::models::project::Project) -> Run
     match project.server_type {
         crate::models::project::ServerType::Apache => RuntimeType::Apache,
         crate::models::project::ServerType::Nginx => RuntimeType::Nginx,
+        crate::models::project::ServerType::Frankenphp => RuntimeType::Frankenphp,
     }
 }
 

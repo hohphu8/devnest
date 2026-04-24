@@ -29,3 +29,36 @@ export function installedPhpVersionFamilies(runtimeInventory: RuntimeInventoryIt
     ),
   ).sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
 }
+
+export function frankenphpVersionFamilies(runtimeInventory: RuntimeInventoryItem[]): string[] {
+  return Array.from(
+    new Set(
+      runtimeInventory
+        .filter((runtime) => runtime.runtimeType === "frankenphp")
+        .map((runtime) => runtime.phpFamily ?? runtimeVersionFamily(runtime.version))
+        .filter(Boolean),
+    ),
+  ).sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+}
+
+export function activeFrankenphpVersionFamily(
+  runtimeInventory: RuntimeInventoryItem[],
+): string | null {
+  const runtime =
+    runtimeInventory.find(
+      (item) =>
+        item.runtimeType === "frankenphp" &&
+        item.isActive &&
+        item.status === "available",
+    ) ??
+    runtimeInventory.find(
+      (item) => item.runtimeType === "frankenphp" && item.isActive,
+    ) ??
+    null;
+
+  if (!runtime) {
+    return null;
+  }
+
+  return runtime.phpFamily ?? runtimeVersionFamily(runtime.version);
+}

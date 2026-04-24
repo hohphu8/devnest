@@ -86,7 +86,14 @@ import type {
   AppUpdateState,
 } from "@/types/update";
 
-const SERVICE_START_ORDER: ServiceName[] = ["mysql", "redis", "mailpit", "apache", "nginx"];
+const SERVICE_START_ORDER: ServiceName[] = [
+  "mysql",
+  "redis",
+  "mailpit",
+  "apache",
+  "nginx",
+  "frankenphp",
+];
 const PROJECTS_VIEW_STORAGE_KEY = "devnest.projects.view-mode";
 const SETTINGS_UPDATE_LAST_CHECKED_KEY = "devnest.settings.updates.last-checked-at";
 
@@ -246,6 +253,8 @@ function runtimeTypeLabel(runtimeType: RuntimeType): string {
       return "Apache";
     case "nginx":
       return "Nginx";
+    case "frankenphp":
+      return "FrankenPHP";
     case "mysql":
       return "MySQL";
   }
@@ -280,6 +289,7 @@ function runtimeFamilyLabel(runtimeType: RuntimeType): string {
       return "Database";
     case "apache":
     case "nginx":
+    case "frankenphp":
       return "Web Server";
   }
 }
@@ -423,6 +433,8 @@ function serviceLabel(name: ServiceName): string {
       return "Apache";
     case "nginx":
       return "Nginx";
+    case "frankenphp":
+      return "FrankenPHP";
     case "mysql":
       return "MySQL";
     case "mailpit":
@@ -904,7 +916,7 @@ function ProjectsRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const [frameworkFilter, setFrameworkFilter] = useState<"all" | "laravel" | "wordpress" | "php" | "unknown">("all");
-  const [serverFilter, setServerFilter] = useState<"all" | "apache" | "nginx">("all");
+  const [serverFilter, setServerFilter] = useState<"all" | "apache" | "nginx" | "frankenphp">("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "running" | "stopped" | "error">("all");
   const [sortBy, setSortBy] = useState<"updated-desc" | "name-asc" | "domain-asc">("updated-desc");
   const [viewMode, setViewMode] = useState<"list" | "grid">(() => {
@@ -1236,6 +1248,7 @@ function ProjectsRoute() {
               <option value="all">All servers</option>
               <option value="apache">Apache</option>
               <option value="nginx">Nginx</option>
+              <option value="frankenphp">FrankenPHP</option>
             </select>
             <select className="select" onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)} value={statusFilter}>
               <option value="all">All statuses</option>
@@ -4048,7 +4061,10 @@ function SettingsRoute() {
   }, [actionLoading]);
 
   useEffect(() => {
-    const phpRuntimes = runtimes.filter((runtime) => runtime.runtimeType === "php");
+    const phpRuntimes = runtimes.filter(
+      (runtime) =>
+        runtime.runtimeType === "php" || runtime.runtimeType === "frankenphp",
+    );
     if (phpRuntimes.length === 0) {
       if (selectedPhpRuntimeId) {
         setSelectedPhpRuntimeId("");
@@ -4703,7 +4719,7 @@ function SettingsRoute() {
       pushToast({
         tone: "success",
         title: "PHP extension installed",
-        message: `${result.installedExtensions.map(phpExtensionLabel).join(", ")} installed into PHP ${result.runtimeVersion}. Restart the linked web server to apply the updated php.ini.`,
+        message: `${result.installedExtensions.map(phpExtensionLabel).join(", ")} installed into ${result.runtimeVersion}. Restart the linked web server to apply the updated php.ini.`,
       });
     } catch (invokeError) {
       pushToast({
@@ -4734,7 +4750,7 @@ function SettingsRoute() {
       pushToast({
         tone: "success",
         title: "PHP extension uninstalled",
-        message: `${phpExtensionLabel(extension.extensionName)} DLL was removed from PHP ${extension.runtimeVersion}. Restart the linked web server to apply the updated php.ini.`,
+        message: `${phpExtensionLabel(extension.extensionName)} DLL was removed from ${extension.runtimeVersion}. Restart the linked web server to apply the updated php.ini.`,
       });
     } catch (invokeError) {
       pushToast({
@@ -4765,7 +4781,7 @@ function SettingsRoute() {
       pushToast({
         tone: "success",
         title: "PHP extension installed",
-        message: `${result.installedExtensions.map(phpExtensionLabel).join(", ")} installed into PHP ${result.runtimeVersion}. Restart the linked web server to apply the updated php.ini.`,
+        message: `${result.installedExtensions.map(phpExtensionLabel).join(", ")} installed into ${result.runtimeVersion}. Restart the linked web server to apply the updated php.ini.`,
       });
     } catch (invokeError) {
       pushToast({
@@ -4910,7 +4926,7 @@ function SettingsRoute() {
     }
   }
 
-  const runtimeTypeOrder: RuntimeType[] = ["php", "apache", "nginx", "mysql"];
+  const runtimeTypeOrder: RuntimeType[] = ["php", "apache", "nginx", "frankenphp", "mysql"];
   const optionalToolTypeOrder: OptionalToolType[] = ["mailpit", "phpmyadmin", "cloudflared"];
   const sortedRuntimes = useMemo(
     () =>
@@ -5035,7 +5051,11 @@ function SettingsRoute() {
     [optionalToolPackages, sortedOptionalTools],
   );
   const phpRuntimes = useMemo(
-    () => sortedRuntimes.filter((runtime) => runtime.runtimeType === "php"),
+    () =>
+      sortedRuntimes.filter(
+        (runtime) =>
+          runtime.runtimeType === "php" || runtime.runtimeType === "frankenphp",
+      ),
     [sortedRuntimes],
   );
   const activePhpToolsRuntimeId = phpToolsRuntimeId ?? selectedPhpRuntimeId;
@@ -5155,7 +5175,10 @@ function SettingsRoute() {
   const webRuntimes = useMemo(
     () =>
       sortedRuntimes.filter(
-        (runtime) => runtime.runtimeType === "apache" || runtime.runtimeType === "nginx",
+        (runtime) =>
+          runtime.runtimeType === "apache" ||
+          runtime.runtimeType === "nginx" ||
+          runtime.runtimeType === "frankenphp",
       ),
     [sortedRuntimes],
   );
@@ -5171,7 +5194,9 @@ function SettingsRoute() {
     () =>
       sortedPackages.filter(
         (runtimePackage) =>
-          runtimePackage.runtimeType === "apache" || runtimePackage.runtimeType === "nginx",
+          runtimePackage.runtimeType === "apache" ||
+          runtimePackage.runtimeType === "nginx" ||
+          runtimePackage.runtimeType === "frankenphp",
       ),
     [sortedPackages],
   );
@@ -5248,14 +5273,14 @@ function SettingsRoute() {
       family === "php"
         ? "Install additional PHP versions into the managed catalog, then open PHP Tools or restart the running web stack when needed."
         : family === "web"
-          ? "Install Apache or Nginx builds into the managed runtime root and switch the active fallback version when needed."
+          ? "Install Apache, Nginx, or FrankenPHP builds into the managed runtime root and switch the active runtime when needed."
           : "Install managed database engines into the workspace catalog and keep the active MySQL runtime ready for local use.";
 
     function renderInstalledRuntimeActions(
       runtime: RuntimeInventoryItem,
       actionableUpdatePackage: RuntimePackage | null,
     ) {
-      if (runtime.runtimeType === "php") {
+      if (runtime.runtimeType === "php" || runtime.runtimeType === "frankenphp") {
         return (
           <div className="runtime-table-actions runtime-table-actions-compact">
             <Button
@@ -5298,14 +5323,16 @@ function SettingsRoute() {
               >
                 {actionLoading === `activate:${runtime.id}` ? "Setting..." : "Set active"}
               </ActionMenuItem>
-              <ActionMenuItem
-                disabled={runtime.status === "missing"}
-                onClick={() => void handleRestartPhpRuntime(runtime)}
-              >
-                {actionLoading === `php-runtime-restart:${runtime.id}`
-                  ? "Restarting..."
-                  : "Restart"}
-              </ActionMenuItem>
+              {runtime.runtimeType === "php" ? (
+                <ActionMenuItem
+                  disabled={runtime.status === "missing"}
+                  onClick={() => void handleRestartPhpRuntime(runtime)}
+                >
+                  {actionLoading === `php-runtime-restart:${runtime.id}`
+                    ? "Restarting..."
+                    : "Restart"}
+                </ActionMenuItem>
+              ) : null}
               <ActionMenuItem onClick={() => setPendingRuntimeRemoval(runtime)} tone="danger">
                 Uninstall
               </ActionMenuItem>
@@ -5411,6 +5438,8 @@ function SettingsRoute() {
                                 ? runtime.isActive
                                   ? "Preferred CLI version and fallback for optional PHP web tools."
                                   : "Tracked per project via project PHP version."
+                                : runtime.runtimeType === "frankenphp"
+                                  ? `Embedded PHP ${runtime.phpFamily ?? "unknown"} · experimental web server`
                                 : runtimeFamilyLabel(runtime.runtimeType)}
                             </span>
                           </div>
@@ -6186,15 +6215,15 @@ function SettingsRoute() {
             family: "web",
             installedTitle: "Installed Web Servers",
             installedDescription:
-              "Manage Apache and Nginx builds here. These runtimes still expose an active fallback because the server layer is selected globally.",
+              "Manage Apache, Nginx, and FrankenPHP builds here. FrankenPHP is tracked as an experimental web server with embedded PHP family compatibility.",
             runtimes: webRuntimes,
             packages: webPackages,
             emptyInstalledTitle: "No web servers installed yet",
             emptyInstalledDescription:
-              "Install Apache or Nginx from the managed catalog so projects can attach to a DevNest-controlled web server.",
+              "Install Apache, Nginx, or FrankenPHP from the managed catalog so projects can attach to a DevNest-controlled web server.",
             emptyDownloadsTitle: "No web server packages available",
             emptyDownloadsDescription:
-              "Configure the runtime manifest to expose downloadable Apache and Nginx builds in this workspace.",
+              "Configure the runtime manifest to expose downloadable Apache, Nginx, and FrankenPHP builds in this workspace.",
           })}
         </div>
 
@@ -6479,7 +6508,10 @@ function SettingsRoute() {
             <div className="runtime-tools-header">
               <div>
                 <h2>PHP Tools</h2>
-                <p>Manage extensions and guarded functions for one tracked PHP runtime without leaving the Installed Runtimes table.</p>
+                <p>
+                  Manage extensions and guarded functions for one tracked PHP or
+                  FrankenPHP runtime without leaving the Installed Runtimes table.
+                </p>
               </div>
               <div className="page-toolbar">
                 <select
@@ -6492,7 +6524,9 @@ function SettingsRoute() {
                 >
                   {phpRuntimes.map((runtime) => (
                     <option key={runtime.id} value={runtime.id}>
-                      PHP {runtime.version}{runtime.isActive ? " (active)" : ""}
+                      {runtime.runtimeType === "frankenphp"
+                        ? `FrankenPHP ${runtime.version} (PHP ${runtime.phpFamily ?? "unknown"})${runtime.isActive ? " (active)" : ""}`
+                        : `PHP ${runtime.version}${runtime.isActive ? " (active)" : ""}`}
                     </option>
                   ))}
                 </select>
@@ -6579,7 +6613,12 @@ function SettingsRoute() {
                   <article className="runtime-tools-stat">
                     <span className="runtime-tools-stat-label">Install More</span>
                     <strong>{installablePhpExtensionRecommendations.length}</strong>
-                    <p>Curated packages DevNest can install for PHP {runtimeVersionFamily(selectedPhpRuntime.version)}.</p>
+                    <p>
+                      Curated packages DevNest can install for PHP{" "}
+                      {selectedPhpRuntime.phpFamily ??
+                        runtimeVersionFamily(selectedPhpRuntime.version)}
+                      .
+                    </p>
                   </article>
                 </section>
                 <section className="runtime-tools-section">
@@ -6802,7 +6841,9 @@ function SettingsRoute() {
                       <h3>Install More</h3>
                       <span className="helper-text">
                         Curated packages and expected bundled DLLs for the{" "}
-                        {runtimeVersionFamily(selectedPhpRuntime.version)} family.
+                        {selectedPhpRuntime.phpFamily ??
+                          runtimeVersionFamily(selectedPhpRuntime.version)}{" "}
+                        family.
                       </span>
                     </div>
                   </div>
@@ -6919,7 +6960,8 @@ function SettingsRoute() {
                 </section>
                 <span className="helper-text runtime-tools-note">
                   Extension changes land in DevNest-managed `php.ini`. Restart the linked Apache,
-                  Nginx, or long-running PHP worker after enabling, disabling, or installing one.
+                  Nginx, FrankenPHP, or long-running PHP worker after enabling, disabling, or
+                  installing one.
                 </span>
               </div>
             ) : (
@@ -7033,7 +7075,7 @@ function SettingsRoute() {
                 </section>
                 <span className="helper-text runtime-tools-note">
                   Runtime policy changes write into `disable_functions`. Restart the linked Apache,
-                  Nginx, or long-running PHP worker after changing these guards.
+                  Nginx, FrankenPHP, or long-running PHP worker after changing these guards.
                 </span>
               </div>
             )}
@@ -7059,7 +7101,7 @@ function SettingsRoute() {
                     <p>
                       This will remove{" "}
                       <strong>{phpExtensionLabel(pendingPhpExtensionRemoval.extensionName)}</strong>{" "}
-                      from PHP {pendingPhpExtensionRemoval.runtimeVersion}.
+                      from {pendingPhpExtensionRemoval.runtimeVersion}.
                     </p>
                     <div className="detail-item">
                       <span className="detail-label">DLL</span>

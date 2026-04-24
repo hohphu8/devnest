@@ -16,6 +16,7 @@ use crate::utils::process::{configure_background_command, is_process_running, ki
 use rusqlite::Connection;
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
+use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -151,15 +152,43 @@ fn is_php_fastcgi_process_name(process_name: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+fn server_type_for_service(service: &ServiceName) -> Option<ServerType> {
+    match service {
+        ServiceName::Apache => Some(ServerType::Apache),
+        ServiceName::Nginx => Some(ServerType::Nginx),
+        ServiceName::Frankenphp => Some(ServerType::Frankenphp),
+        ServiceName::Mysql | ServiceName::Mailpit | ServiceName::Redis => None,
+    }
+}
+
+fn project_matches_server_type(
+    project: &crate::models::project::Project,
+    server_type: &ServerType,
+) -> bool {
+    matches!(
+        (&project.server_type, server_type),
+        (ServerType::Apache, ServerType::Apache)
+            | (ServerType::Nginx, ServerType::Nginx)
+            | (ServerType::Frankenphp, ServerType::Frankenphp)
+    )
+}
+
+fn is_managed_web_service(service: &ServiceName) -> bool {
+    matches!(
+        service,
+        ServiceName::Apache | ServiceName::Nginx | ServiceName::Frankenphp
+    )
+}
+
+fn service_uses_php_fastcgi(service: &ServiceName) -> bool {
+    matches!(service, ServiceName::Apache | ServiceName::Nginx)
+}
+
 fn required_php_versions_for_service(
     connection: &Connection,
     service: &ServiceName,
 ) -> Result<Vec<String>, AppError> {
-    let server_type = match service {
-        ServiceName::Apache => Some(ServerType::Apache),
-        ServiceName::Nginx => Some(ServerType::Nginx),
-        ServiceName::Mysql | ServiceName::Mailpit | ServiceName::Redis => None,
-    };
+    let server_type = server_type_for_service(service);
 
     let Some(server_type) = server_type else {
         return Ok(Vec::new());
@@ -169,25 +198,82 @@ fn required_php_versions_for_service(
     let mut versions = BTreeSet::new();
 
     for project in projects {
-        let matches_server = matches!(
-            (&project.server_type, &server_type),
-            (ServerType::Apache, ServerType::Apache) | (ServerType::Nginx, ServerType::Nginx)
-        );
-        if matches_server {
+        if service_uses_php_fastcgi(service) && project_matches_server_type(&project, &server_type)
+        {
             versions.insert(project.php_version);
         }
     }
 
-    if OptionalToolVersionRepository::find_active_by_type(
-        connection,
-        &crate::models::optional_tool::OptionalToolType::Phpmyadmin,
-    )?
-    .is_some()
+    if service_uses_php_fastcgi(service)
+        && OptionalToolVersionRepository::find_active_by_type(
+            connection,
+            &crate::models::optional_tool::OptionalToolType::Phpmyadmin,
+        )?
+        .is_some()
     {
         versions.insert(preferred_php_version_for_optional_web_tool(connection)?);
     }
 
     Ok(versions.into_iter().collect())
+}
+
+fn ensure_frankenphp_runtime_compatibility(
+    connection: &Connection,
+    service: &ServiceName,
+) -> Result<(), AppError> {
+    if !matches!(service, ServiceName::Frankenphp) {
+        return Ok(());
+    }
+
+    let runtime =
+        RuntimeVersionRepository::find_active_by_type(connection, &RuntimeType::Frankenphp)?
+            .ok_or_else(|| {
+                AppError::new_validation(
+                    "RUNTIME_NOT_AVAILABLE",
+                    "Select an active FrankenPHP runtime before starting FrankenPHP projects.",
+                )
+            })?;
+    let embedded_family =
+        runtime_registry::frankenphp_embedded_php_family(Path::new(&runtime.path))?;
+
+    let incompatible = ProjectRepository::list(connection)?
+        .into_iter()
+        .filter(|project| matches!(project.server_type, ServerType::Frankenphp))
+        .find(|project| {
+            runtime_registry::runtime_version_family(&project.php_version) != embedded_family
+        });
+
+    if let Some(project) = incompatible {
+        return Err(AppError::new_validation(
+            "FRANKENPHP_PHP_VERSION_MISMATCH",
+            format!(
+                "FrankenPHP embeds PHP {}, but project {} targets PHP {}. Pick a matching FrankenPHP runtime or change the project PHP version.",
+                embedded_family, project.name, project.php_version
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+fn service_requires_https_port(
+    connection: &Connection,
+    service: &ServiceName,
+) -> Result<bool, AppError> {
+    let Some(server_type) = server_type_for_service(service) else {
+        return Ok(false);
+    };
+
+    let project_uses_https = ProjectRepository::list(connection)?
+        .into_iter()
+        .any(|project| project_matches_server_type(&project, &server_type) && project.ssl_enabled);
+    let phpmyadmin_enabled = OptionalToolVersionRepository::find_active_by_type(
+        connection,
+        &crate::models::optional_tool::OptionalToolType::Phpmyadmin,
+    )?
+    .is_some();
+
+    Ok(project_uses_https || phpmyadmin_enabled)
 }
 
 fn public_tunnel_host(public_url: &str) -> Option<String> {
@@ -246,22 +332,14 @@ pub(crate) fn sync_managed_configs_for_service(
     state: &AppState,
     service: &ServiceName,
 ) -> Result<(), AppError> {
-    let server_type = match service {
-        ServiceName::Apache => Some(ServerType::Apache),
-        ServiceName::Nginx => Some(ServerType::Nginx),
-        ServiceName::Mysql | ServiceName::Mailpit | ServiceName::Redis => None,
-    };
+    let server_type = server_type_for_service(service);
 
     let Some(server_type) = server_type else {
         return Ok(());
     };
 
     for project in ProjectRepository::list(connection)? {
-        let matches_server = matches!(
-            (&project.server_type, &server_type),
-            (ServerType::Apache, ServerType::Apache) | (ServerType::Nginx, ServerType::Nginx)
-        );
-        if matches_server {
+        if project_matches_server_type(&project, &server_type) {
             let aliases = public_host_aliases_for_project(connection, state, &project.id)?;
             config_generator::generate_config_with_aliases(
                 &project,
@@ -401,6 +479,9 @@ fn start_php_fastcgi_process(
 
     let mut command = Command::new(&runtime.binary_path);
     command.args(&runtime.args);
+    for (key, value) in &runtime.env_vars {
+        command.env(key, value);
+    }
     configure_background_command(&mut command);
     command.stdout(Stdio::from(stdout));
     command.stderr(Stdio::from(stderr));
@@ -691,9 +772,32 @@ pub fn start_service(
         service.clone(),
     )?;
     guard_service_ports(&service, runtime.port)?;
+    if is_managed_web_service(&service) && service_requires_https_port(connection, &service)? {
+        let https_port_check = ports::check_port(443)?;
+        if !https_port_check.available {
+            return Err(AppError::with_details(
+                "PORT_IN_USE",
+                format!(
+                    "Port 443 is already in use by {}. Stop the conflicting process before starting {} with HTTPS-enabled sites.",
+                    https_port_check
+                        .process_name
+                        .as_deref()
+                        .unwrap_or("another process"),
+                    service.display_name()
+                ),
+                format!(
+                    "pid={:?}, processName={:?}",
+                    https_port_check.pid, https_port_check.process_name
+                ),
+            ));
+        }
+    }
 
-    if matches!(service, ServiceName::Apache | ServiceName::Nginx) {
+    if is_managed_web_service(&service) {
         sync_managed_configs_for_service(connection, state, &service)?;
+        ensure_frankenphp_runtime_compatibility(connection, &service)?;
+    }
+    if service_uses_php_fastcgi(&service) {
         ensure_php_fastcgi_processes(connection, state, &service)?;
     }
 
@@ -737,6 +841,9 @@ pub fn start_service(
 
     let mut command = Command::new(&runtime.binary_path);
     command.args(&runtime.args);
+    for (key, value) in &runtime.env_vars {
+        command.env(key, value);
+    }
     configure_background_command(&mut command);
     command.stdout(Stdio::from(stdout));
     command.stderr(Stdio::from(stderr));
@@ -746,7 +853,7 @@ pub fn start_service(
     }
 
     let mut child = command.spawn().map_err(|error| {
-        if matches!(service, ServiceName::Apache | ServiceName::Nginx) {
+        if service_uses_php_fastcgi(&service) {
             let _ = stop_php_fastcgi_processes(state);
         }
 
@@ -768,7 +875,7 @@ pub fn start_service(
                 )
             });
             let _ = save_error_state(connection, &service, runtime.port, &error_message);
-            if matches!(service, ServiceName::Apache | ServiceName::Nginx) {
+            if service_uses_php_fastcgi(&service) {
                 let _ = stop_php_fastcgi_processes(state);
             }
 
@@ -790,7 +897,7 @@ pub fn start_service(
                 runtime.port,
                 "The service started but its process state could not be verified.",
             );
-            if matches!(service, ServiceName::Apache | ServiceName::Nginx) {
+            if service_uses_php_fastcgi(&service) {
                 let _ = stop_php_fastcgi_processes(state);
             }
 
@@ -873,7 +980,7 @@ pub fn stop_service(
         }
     }
 
-    if matches!(service, ServiceName::Apache | ServiceName::Nginx) {
+    if service_uses_php_fastcgi(&service) {
         stop_php_fastcgi_processes(state)?;
     }
 

@@ -30,6 +30,7 @@ fn service_start_rank(name: &ServiceName) -> usize {
         ServiceName::Mailpit => 2,
         ServiceName::Apache => 3,
         ServiceName::Nginx => 4,
+        ServiceName::Frankenphp => 5,
     }
 }
 

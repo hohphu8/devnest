@@ -579,6 +579,16 @@ function defaultMockServices(): ServiceState[] {
       updatedAt: timestamp,
     },
     {
+      name: "frankenphp",
+      enabled: true,
+      autoStart: false,
+      port: 80,
+      pid: null,
+      status: "stopped",
+      lastError: null,
+      updatedAt: timestamp,
+    },
+    {
       name: "mysql",
       enabled: true,
       autoStart: false,
@@ -640,6 +650,19 @@ function defaultMockRuntimeInventory(): RuntimeInventoryItem[] {
       details: null,
     },
     {
+      id: "frankenphp-1.5.3",
+      runtimeType: "frankenphp",
+      version: "1.5.3",
+      phpFamily: "8.4",
+      path: "D:/tools/frankenphp/frankenphp.exe",
+      isActive: false,
+      source: "external",
+      status: "available",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      details: "Embedded PHP 8.4 runtime with managed Caddy config.",
+    },
+    {
       id: "mysql-8.0",
       runtimeType: "mysql",
       version: "8.0",
@@ -655,6 +678,7 @@ function defaultMockRuntimeInventory(): RuntimeInventoryItem[] {
       id: "php-8.2",
       runtimeType: "php",
       version: "8.2",
+      phpFamily: "8.2",
       path: "D:/laragon/bin/php/php-8.2/php.exe",
       isActive: true,
       source: "external",
@@ -672,6 +696,7 @@ function defaultMockRuntimePackages(): RuntimePackage[] {
       id: "php-7.4.32-win-x64",
       runtimeType: "php",
       version: "7.4.32",
+      phpFamily: "7.4",
       platform: "windows",
       arch: "x64",
       displayName: "PHP 7.4.32",
@@ -685,6 +710,7 @@ function defaultMockRuntimePackages(): RuntimePackage[] {
       id: "php-8.0.30-win-x64",
       runtimeType: "php",
       version: "8.0.30",
+      phpFamily: "8.0",
       platform: "windows",
       arch: "x64",
       displayName: "PHP 8.0.30",
@@ -698,6 +724,7 @@ function defaultMockRuntimePackages(): RuntimePackage[] {
       id: "php-8.1.34-win-x64",
       runtimeType: "php",
       version: "8.1.34",
+      phpFamily: "8.1",
       platform: "windows",
       arch: "x64",
       displayName: "PHP 8.1.34",
@@ -711,6 +738,7 @@ function defaultMockRuntimePackages(): RuntimePackage[] {
       id: "php-8.2.30-win-x64",
       runtimeType: "php",
       version: "8.2.30",
+      phpFamily: "8.2",
       platform: "windows",
       arch: "x64",
       displayName: "PHP 8.2.30",
@@ -724,6 +752,7 @@ function defaultMockRuntimePackages(): RuntimePackage[] {
       id: "php-8.5.5-win-x64",
       runtimeType: "php",
       version: "8.5.5",
+      phpFamily: "8.5",
       platform: "windows",
       arch: "x64",
       displayName: "PHP 8.5.5",
@@ -737,6 +766,7 @@ function defaultMockRuntimePackages(): RuntimePackage[] {
       id: "php-8.4.20-win-x64",
       runtimeType: "php",
       version: "8.4.20",
+      phpFamily: "8.4",
       platform: "windows",
       arch: "x64",
       displayName: "PHP 8.4.20",
@@ -771,6 +801,20 @@ function defaultMockRuntimePackages(): RuntimePackage[] {
       archiveKind: "zip",
       entryBinary: "nginx-1.28.0/nginx.exe",
       notes: "Preview catalog entry.",
+    },
+    {
+      id: "frankenphp-1.5.3-win-x64",
+      runtimeType: "frankenphp",
+      version: "1.5.3",
+      phpFamily: "8.4",
+      platform: "windows",
+      arch: "x64",
+      displayName: "FrankenPHP 1.5.3",
+      downloadUrl: "https://downloads.devnest.invalid/frankenphp-1.5.3-win-x64.zip",
+      checksumSha256: "demo-checksum",
+      archiveKind: "zip",
+      entryBinary: "frankenphp.exe",
+      notes: "Preview catalog entry with embedded PHP 8.4.",
     },
     {
       id: "mariadb-11.8.3-win-x64",
@@ -838,6 +882,130 @@ function defaultMockPhpAvailableExtensions(): string[] {
   ];
 }
 
+function mockRuntimeVersionForType(runtimeType: RuntimeInventoryItem["runtimeType"]): string {
+  switch (runtimeType) {
+    case "php":
+      return "8.2.12";
+    case "apache":
+      return "2.4.54";
+    case "nginx":
+      return "1.22.0";
+    case "frankenphp":
+      return "1.5.3";
+    case "mysql":
+      return "8.0.30";
+  }
+}
+
+function mockRuntimePhpFamilyForItem(runtime: Pick<RuntimeInventoryItem, "runtimeType" | "version" | "phpFamily">) {
+  if (runtime.runtimeType === "php") {
+    return runtime.phpFamily ?? mockPhpVersionFamily(runtime.version);
+  }
+
+  if (runtime.runtimeType === "frankenphp") {
+    return runtime.phpFamily ?? "8.4";
+  }
+
+  return null;
+}
+
+function mockRuntimePhpFamilyForType(
+  runtimeType: RuntimeInventoryItem["runtimeType"],
+  version: string,
+) {
+  if (runtimeType === "php") {
+    return mockPhpVersionFamily(version);
+  }
+
+  if (runtimeType === "frankenphp") {
+    return "8.4";
+  }
+
+  return null;
+}
+
+function isMockPhpToolsRuntime(
+  runtime: RuntimeInventoryItem | undefined,
+): runtime is RuntimeInventoryItem & { runtimeType: "php" | "frankenphp" } {
+  return Boolean(
+    runtime && (runtime.runtimeType === "php" || runtime.runtimeType === "frankenphp"),
+  );
+}
+
+function mockPhpToolsRuntimeLabel(
+  runtime: Pick<RuntimeInventoryItem, "runtimeType" | "version" | "phpFamily">,
+): string {
+  if (runtime.runtimeType === "frankenphp") {
+    return `FrankenPHP ${runtime.version} (PHP ${mockRuntimePhpFamilyForItem(runtime) ?? "unknown"})`;
+  }
+
+  return runtime.version;
+}
+
+function mockManagedRuntimeBinaryPath(
+  runtimeType: RuntimeInventoryItem["runtimeType"],
+  version: string,
+  root: "downloaded" | "managed",
+) {
+  const baseRoot =
+    root === "downloaded"
+      ? `${MOCK_APP_DATA_ROOT}/runtimes/downloaded`
+      : `${MOCK_APP_DATA_ROOT}/runtimes`;
+
+  switch (runtimeType) {
+    case "php":
+      return `${baseRoot}/php/${version}/php.exe`;
+    case "apache":
+      return `${baseRoot}/apache/${version}/bin/httpd.exe`;
+    case "nginx":
+      return `${baseRoot}/nginx/${version}/nginx.exe`;
+    case "frankenphp":
+      return `${baseRoot}/frankenphp/${version}/frankenphp.exe`;
+    case "mysql":
+      return `${baseRoot}/mysql/${version}/bin/mysqld.exe`;
+  }
+}
+
+function findMockServerRuntime(project: Project, runtimes = readMockRuntimes()) {
+  return runtimes.find((runtime) => runtime.runtimeType === project.serverType && runtime.isActive) ?? null;
+}
+
+function findMockPhpRuntimeForProject(
+  project: Project,
+  runtimes = readMockRuntimes(),
+  serverRuntime = findMockServerRuntime(project, runtimes),
+) {
+  const expectedPhpFamily = mockPhpVersionFamily(project.phpVersion);
+
+  if (project.serverType === "frankenphp") {
+    const resolvedPhpFamily = serverRuntime ? mockRuntimePhpFamilyForItem(serverRuntime) : null;
+    return {
+      runtime: serverRuntime,
+      embedded: true,
+      expectedPhpFamily,
+      resolvedPhpFamily,
+      matchesVersion: Boolean(
+        serverRuntime?.status === "available" && resolvedPhpFamily === expectedPhpFamily,
+      ),
+    };
+  }
+
+  const runtime =
+    runtimes.find(
+      (item) =>
+        item.runtimeType === "php" &&
+        mockRuntimePhpFamilyForItem(item) === expectedPhpFamily,
+    ) ?? null;
+
+  return {
+    runtime,
+    embedded: false,
+    expectedPhpFamily,
+    resolvedPhpFamily: runtime ? mockRuntimePhpFamilyForItem(runtime) : null,
+    matchesVersion: Boolean(runtime?.status === "available"),
+  };
+}
+
 function mockRuntimeConfigPath(runtime: RuntimeInventoryItem): string {
   switch (runtime.runtimeType) {
     case "php":
@@ -846,6 +1014,8 @@ function mockRuntimeConfigPath(runtime: RuntimeInventoryItem): string {
       return `${MOCK_APP_DATA_ROOT}/service-state/apache/httpd.conf`;
     case "nginx":
       return `${MOCK_APP_DATA_ROOT}/service-state/nginx/nginx.conf`;
+    case "frankenphp":
+      return `${MOCK_APP_DATA_ROOT}/service-state/frankenphp/Caddyfile`;
     case "mysql":
       return `${MOCK_APP_DATA_ROOT}/service-state/mysql/my.ini`;
   }
@@ -890,6 +1060,8 @@ function defaultMockRuntimeConfigValues(runtime: RuntimeInventoryItem): Record<s
         worker_processes: "1",
         worker_connections: "1024",
       };
+    case "frankenphp":
+      return {};
     case "mysql":
       return {};
   }
@@ -901,7 +1073,7 @@ function mockRuntimeConfigSchema(runtime: RuntimeInventoryItem): RuntimeConfigSc
     { value: "off", label: "Off" },
   ];
 
-  if (runtime.runtimeType === "mysql") {
+  if (runtime.runtimeType === "mysql" || runtime.runtimeType === "frankenphp") {
     return {
       runtimeId: runtime.id,
       runtimeType: runtime.runtimeType,
@@ -1093,6 +1265,21 @@ function mockPhpExtensionPackages(): PhpExtensionPackage[] {
     dllFile: "php_redis.dll",
     notes: `PECL Redis build for PHP ${phpFamily} x64 NTS.`,
   }));
+  const redisTsPackages = phpFamilies.map((phpFamily) => ({
+    id: `php-redis-6.3.0-${phpFamily}-ts-win-x64`,
+    extensionName: "redis",
+    phpFamily,
+    threadSafety: "ts" as const,
+    version: "6.3.0",
+    platform: "windows",
+    arch: "x64",
+    displayName: "Redis 6.3.0",
+    downloadUrl: `https://downloads.php.net/~windows/pecl/releases/redis/6.3.0/php_redis-6.3.0-${phpFamily}-ts-${mockPhpCompilerFamily(phpFamily)}-x64.zip`,
+    checksumSha256: null,
+    packageKind: "zip" as const,
+    dllFile: "php_redis.dll",
+    notes: `PECL Redis build for PHP ${phpFamily} x64 TS.`,
+  }));
 
   const memcachePackages = phpFamilies.map((phpFamily) => ({
     id:
@@ -1171,6 +1358,7 @@ function mockPhpExtensionPackages(): PhpExtensionPackage[] {
 
   return [
     ...redisPackages,
+    ...redisTsPackages,
     ...memcachePackages,
     ...memcachedPackages,
     ...xdebugPackages,
@@ -1178,9 +1366,18 @@ function mockPhpExtensionPackages(): PhpExtensionPackage[] {
   ];
 }
 
-function mockPhpExtensionPackagesForRuntime(runtimeVersion: string): PhpExtensionPackage[] {
-  const phpFamily = mockPhpVersionFamily(runtimeVersion);
-  return mockPhpExtensionPackages().filter((item) => item.phpFamily === phpFamily);
+function mockPhpExtensionPackagesForRuntime(
+  runtime: Pick<RuntimeInventoryItem, "runtimeType" | "version" | "phpFamily">,
+): PhpExtensionPackage[] {
+  const phpFamily = mockRuntimePhpFamilyForItem(runtime) ?? mockPhpVersionFamily(runtime.version);
+  const requiredThreadSafety = runtime.runtimeType === "frankenphp" ? "ts" : null;
+  return mockPhpExtensionPackages().filter(
+    (item) =>
+      item.phpFamily === phpFamily &&
+      (requiredThreadSafety
+        ? item.threadSafety === requiredThreadSafety
+        : !item.threadSafety || item.threadSafety === "nts"),
+  );
 }
 
 function readMockRuntimes(): RuntimeInventoryItem[] {
@@ -2092,6 +2289,7 @@ function createMockRecipeProject(
 function mockDiagnostics(projectId: string): DiagnosticItem[] {
   const project = getMockProjectOrThrow(projectId);
   const services = readMockServices();
+  const runtimes = readMockRuntimes();
   const timestamp = new Date().toISOString();
   const items: DiagnosticItem[] = [];
   const runtimeService = services.find((service) => service.name === project.serverType);
@@ -2140,6 +2338,23 @@ function mockDiagnostics(projectId: string): DiagnosticItem[] {
       suggestion: "Run the desktop app to verify `mod_rewrite` against the real Apache runtime.",
       createdAt: timestamp,
     });
+  }
+
+  if (project.serverType === "frankenphp") {
+    const phpBinding = findMockPhpRuntimeForProject(project, runtimes);
+    if (phpBinding.runtime && !phpBinding.matchesVersion) {
+      items.push({
+        id: "diag-frankenphp-php-family",
+        projectId,
+        level: "error",
+        code: "FRANKENPHP_PHP_VERSION_MISMATCH",
+        title: "FrankenPHP embeds a different PHP family",
+        message: `The active FrankenPHP runtime embeds PHP ${phpBinding.resolvedPhpFamily ?? "unknown"}, but ${project.name} expects PHP ${phpBinding.expectedPhpFamily}.`,
+        suggestion:
+          "Switch to a FrankenPHP runtime with the matching embedded PHP family, or change the project's selected PHP version.",
+        createdAt: timestamp,
+      });
+    }
   }
 
   if (project.framework === "laravel" && project.phpVersion === "8.1") {
@@ -2202,7 +2417,6 @@ function buildMockConfigPreview(project: Project) {
     project.documentRoot === "."
       ? `${project.path.replace(/\\/g, "/")}`
       : `${project.path.replace(/\\/g, "/")}/${project.documentRoot.replace(/\\/g, "/")}`;
-  const outputPath = `.devnest/managed-configs/${project.serverType}/sites/${project.domain}.conf`;
   const logsBase = `.devnest/managed-configs/logs/${project.domain}-${project.serverType}`;
   const sslBase = `.devnest/ssl/${project.domain}`;
 
@@ -2212,6 +2426,36 @@ function buildMockConfigPreview(project: Project) {
       message: "Laravel projects must use `public` as the document root for generated local config.",
     } satisfies AppError;
   }
+
+  if (project.serverType === "frankenphp") {
+    const outputPath = `.devnest/managed-configs/frankenphp/sites/${project.domain}.caddy`;
+    const tlsBlock = project.sslEnabled
+      ? `
+    tls ${sslBase}/cert.pem ${sslBase}/key.pem
+`
+      : "";
+
+    return {
+      serverType: "frankenphp" as const,
+      outputPath,
+      configText: `${project.domain} {
+    root * ${documentRoot}
+    encode zstd gzip
+${tlsBlock}    php_server
+    file_server
+
+    log {
+        output file ${logsBase}-access.log
+        format console
+    }
+
+    # Managed FrankenPHP site preview for PHP ${project.phpVersion}
+}
+`,
+    };
+  }
+
+  const outputPath = `.devnest/managed-configs/${project.serverType}/sites/${project.domain}.conf`;
 
   if (project.serverType === "apache") {
     const httpsBlock = project.sslEnabled
@@ -4486,7 +4730,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
             label: "Managed Config Alias",
             status: hostname ? "running" : "error",
             message: hostname
-              ? "Managed Apache or Nginx config includes the stable hostname."
+              ? "Managed Apache, Nginx, or FrankenPHP config includes the stable hostname."
               : "Managed config does not currently include the reserved hostname alias.",
           },
           {
@@ -4734,13 +4978,8 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       }
 
       if (project) {
-        const serverRuntime = runtimes.find(
-          (runtime) => runtime.runtimeType === project.serverType && runtime.isActive,
-        );
-        const phpRuntime = runtimes.find(
-          (runtime) =>
-            runtime.runtimeType === "php" && runtime.version.startsWith(project.phpVersion),
-        );
+        const serverRuntime = findMockServerRuntime(project, runtimes);
+        const phpBinding = findMockPhpRuntimeForProject(project, runtimes, serverRuntime);
         checks.push({
           code: "SERVER_RUNTIME",
           layer: "runtime",
@@ -4758,16 +4997,22 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         checks.push({
           code: "PHP_RUNTIME",
           layer: "runtime",
-          status: phpRuntime?.status === "available" ? "ok" : "error",
-          blocking: phpRuntime?.status !== "available",
+          status: phpBinding.matchesVersion ? "ok" : "error",
+          blocking: !phpBinding.matchesVersion,
           title: "PHP runtime",
-          message: phpRuntime
-            ? `PHP ${project.phpVersion} resolves to ${phpRuntime.path}.`
-            : `No PHP ${project.phpVersion} runtime is linked.`,
+          message: phpBinding.runtime
+            ? phpBinding.embedded
+              ? `FrankenPHP ${phpBinding.runtime.version} embeds PHP ${phpBinding.resolvedPhpFamily ?? "unknown"} at ${phpBinding.runtime.path}.`
+              : `PHP ${project.phpVersion} resolves to ${phpBinding.runtime.path}.`
+            : phpBinding.embedded
+              ? `No active FrankenPHP runtime is linked for the embedded PHP ${phpBinding.expectedPhpFamily} requirement.`
+              : `No PHP ${project.phpVersion} runtime is linked.`,
           suggestion:
-            phpRuntime?.status === "available"
+            phpBinding.matchesVersion
               ? null
-              : "Link or import the matching PHP runtime before retrying.",
+              : phpBinding.embedded
+                ? "Link or activate a FrankenPHP runtime with the matching embedded PHP family before retrying."
+                : "Link or import the matching PHP runtime before retrying.",
         });
 
         if (action === "provisionProject") {
@@ -4832,26 +5077,34 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const project = getMockProjectOrThrow(projectId);
       const diagnostics = mockDiagnostics(projectId);
       const runtimes = readMockRuntimes();
-      const serverRuntime =
-        runtimes.find((runtime) => runtime.runtimeType === project.serverType && runtime.isActive) ??
-        null;
-      const phpRuntime =
-        runtimes.find(
-          (runtime) =>
-            runtime.runtimeType === "php" && runtime.version.startsWith(project.phpVersion),
-        ) ?? null;
+      const serverRuntime = findMockServerRuntime(project, runtimes);
+      const phpBinding = findMockPhpRuntimeForProject(project, runtimes, serverRuntime);
       const mysqlRuntime =
         project.databaseName || project.databasePort
           ? runtimes.find((runtime) => runtime.runtimeType === "mysql" && runtime.isActive) ?? null
           : null;
-        return {
-          project,
-          diagnostics,
+      const configPreview = (() => {
+        try {
+          return buildMockConfigPreview(project);
+        } catch (error) {
+          return {
+            serverType: project.serverType,
+            outputPath: `.devnest/managed-configs/${project.serverType}/sites/${project.domain}.${project.serverType === "frankenphp" ? "caddy" : "conf"}`,
+            configText:
+              error instanceof Error
+                ? error.message
+                : "Managed config preview is unavailable until the project profile is corrected.",
+          };
+        }
+      })();
+      return {
+        project,
+        diagnostics,
         services: readMockServices(),
         config: {
           serverType: project.serverType,
-          outputPath: `${MOCK_APP_DATA_ROOT}/configs/${project.domain}.conf`,
-          preview: `# Mock ${project.serverType} config for ${project.domain}`,
+          outputPath: configPreview.outputPath,
+          preview: configPreview.configText,
           localDomainAliasPresent: Boolean(readMockHosts()[project.domain]),
           persistentAliasPresent: Boolean(readMockProjectPersistentHostnames()[projectId]),
         },
@@ -4865,12 +5118,16 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
             details: serverRuntime?.details ?? null,
           },
           php: {
-            kind: "php",
-            version: phpRuntime?.version ?? null,
-            path: phpRuntime?.path ?? null,
-            active: Boolean(phpRuntime?.isActive),
-            available: phpRuntime?.status === "available",
-            details: phpRuntime?.details ?? null,
+            kind: phpBinding.embedded ? "frankenphp-embedded-php" : "php",
+            version: phpBinding.resolvedPhpFamily ?? phpBinding.runtime?.version ?? null,
+            path: phpBinding.runtime?.path ?? null,
+            active: Boolean(phpBinding.runtime?.isActive),
+            available: phpBinding.matchesVersion,
+            details: phpBinding.runtime
+              ? phpBinding.embedded
+                ? `Embedded PHP ${phpBinding.resolvedPhpFamily ?? "unknown"} from FrankenPHP ${phpBinding.runtime.version}.`
+                : phpBinding.runtime.details ?? null
+              : null,
           },
           mysql: mysqlRuntime
             ? {
@@ -4882,7 +5139,13 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
                 details: mysqlRuntime.details ?? null,
               }
             : null,
-          issues: [],
+          issues: phpBinding.matchesVersion
+            ? []
+            : [
+                phpBinding.embedded
+                  ? `FrankenPHP embeds PHP ${phpBinding.resolvedPhpFamily ?? "unknown"}, but the project expects PHP ${phpBinding.expectedPhpFamily}.`
+                  : `No PHP runtime is linked for PHP ${phpBinding.expectedPhpFamily}.`,
+              ],
         },
         quickTunnel: readMockProjectTunnels()[projectId] ?? null,
         persistentHostname: readMockProjectPersistentHostnames()[projectId] ?? null,
@@ -4952,10 +5215,17 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         writeMockHosts(hosts);
       }
       if (workflow === "runtimeLinks") {
+        const expectedPhpFamily = mockPhpVersionFamily(project.phpVersion);
         const runtimes = readMockRuntimes().map((runtime) => {
           if (
-            runtime.runtimeType === project.serverType ||
-            (runtime.runtimeType === "php" && runtime.version.startsWith(project.phpVersion))
+            (
+              runtime.runtimeType === project.serverType &&
+              (project.serverType !== "frankenphp" ||
+                mockRuntimePhpFamilyForItem(runtime) === expectedPhpFamily)
+            ) ||
+            (project.serverType !== "frankenphp" &&
+              runtime.runtimeType === "php" &&
+              mockRuntimePhpFamilyForItem(runtime) === expectedPhpFamily)
           ) {
             return {
               ...runtime,
@@ -4964,7 +5234,10 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
               updatedAt: timestamp,
             };
           }
-          if (runtime.runtimeType === project.serverType || runtime.runtimeType === "php") {
+          if (
+            runtime.runtimeType === project.serverType ||
+            (project.serverType !== "frankenphp" && runtime.runtimeType === "php")
+          ) {
             return { ...runtime, isActive: false, updatedAt: timestamp };
           }
           return runtime;
@@ -5058,41 +5331,38 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
     }
     case "list_php_extensions": {
       const runtimeId = String(args?.runtimeId ?? "");
-      const runtime = readMockRuntimes().find(
-        (item) => item.id === runtimeId && item.runtimeType === "php",
-      );
-      if (!runtime) {
+      const runtime = readMockRuntimes().find((item) => item.id === runtimeId);
+      if (!isMockPhpToolsRuntime(runtime)) {
         throw {
           code: "RUNTIME_NOT_FOUND",
-          message: "PHP runtime entry was not found.",
+          message: "PHP tools runtime entry was not found.",
         } satisfies AppError;
       }
 
-      return mockPhpExtensionsForRuntime(runtime.id, runtime.version) as T;
+      return mockPhpExtensionsForRuntime(
+        runtime.id,
+        mockPhpToolsRuntimeLabel(runtime),
+      ) as T;
     }
     case "list_php_extension_packages": {
       const runtimeId = String(args?.runtimeId ?? "");
-      const runtime = readMockRuntimes().find(
-        (item) => item.id === runtimeId && item.runtimeType === "php",
-      );
-      if (!runtime) {
+      const runtime = readMockRuntimes().find((item) => item.id === runtimeId);
+      if (!isMockPhpToolsRuntime(runtime)) {
         throw {
           code: "RUNTIME_NOT_FOUND",
-          message: "PHP runtime entry was not found.",
+          message: "PHP tools runtime entry was not found.",
         } satisfies AppError;
       }
 
-      return mockPhpExtensionPackagesForRuntime(runtime.version) as T;
+      return mockPhpExtensionPackagesForRuntime(runtime) as T;
     }
     case "install_php_extension": {
       const runtimeId = String(args?.runtimeId ?? "");
-      const runtime = readMockRuntimes().find(
-        (item) => item.id === runtimeId && item.runtimeType === "php",
-      );
-      if (!runtime) {
+      const runtime = readMockRuntimes().find((item) => item.id === runtimeId);
+      if (!isMockPhpToolsRuntime(runtime)) {
         throw {
           code: "RUNTIME_NOT_FOUND",
-          message: "PHP runtime entry was not found.",
+          message: "PHP tools runtime entry was not found.",
         } satisfies AppError;
       }
 
@@ -5104,7 +5374,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
 
       return ({
         runtimeId: runtime.id,
-        runtimeVersion: runtime.version,
+        runtimeVersion: mockPhpToolsRuntimeLabel(runtime),
         installedExtensions: [nextExtensionName],
         sourcePath: `${MOCK_APP_DATA_ROOT}/php-extensions/${nextExtensionName}.dll`,
       } satisfies PhpExtensionInstallResult) as T;
@@ -5112,17 +5382,15 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
     case "install_php_extension_package": {
       const runtimeId = String(args?.runtimeId ?? "");
       const packageId = String(args?.packageId ?? "");
-      const runtime = readMockRuntimes().find(
-        (item) => item.id === runtimeId && item.runtimeType === "php",
-      );
-      if (!runtime) {
+      const runtime = readMockRuntimes().find((item) => item.id === runtimeId);
+      if (!isMockPhpToolsRuntime(runtime)) {
         throw {
           code: "RUNTIME_NOT_FOUND",
-          message: "PHP runtime entry was not found.",
+          message: "PHP tools runtime entry was not found.",
         } satisfies AppError;
       }
 
-      const extensionPackage = mockPhpExtensionPackagesForRuntime(runtime.version).find(
+      const extensionPackage = mockPhpExtensionPackagesForRuntime(runtime).find(
         (item) => item.id === packageId,
       );
       if (!extensionPackage) {
@@ -5148,7 +5416,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
 
       return ({
         runtimeId: runtime.id,
-        runtimeVersion: runtime.version,
+        runtimeVersion: mockPhpToolsRuntimeLabel(runtime),
         installedExtensions: [extensionPackage.extensionName],
         sourcePath: extensionPackage.downloadUrl,
       } satisfies PhpExtensionInstallResult) as T;
@@ -5156,13 +5424,11 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
     case "remove_php_extension": {
       const runtimeId = String(args?.runtimeId ?? "");
       const extensionName = String(args?.extensionName ?? "").trim().toLowerCase();
-      const runtime = readMockRuntimes().find(
-        (item) => item.id === runtimeId && item.runtimeType === "php",
-      );
-      if (!runtime) {
+      const runtime = readMockRuntimes().find((item) => item.id === runtimeId);
+      if (!isMockPhpToolsRuntime(runtime)) {
         throw {
           code: "RUNTIME_NOT_FOUND",
-          message: "PHP runtime entry was not found.",
+          message: "PHP tools runtime entry was not found.",
         } satisfies AppError;
       }
 
@@ -5171,7 +5437,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       if (!currentExtensions.includes(extensionName)) {
         throw {
           code: "PHP_EXTENSION_NOT_AVAILABLE",
-          message: `PHP ${runtime.version} does not expose the \`${extensionName}\` extension in browser mock mode.`,
+          message: `${mockPhpToolsRuntimeLabel(runtime)} does not expose the \`${extensionName}\` extension in browser mock mode.`,
         } satisfies AppError;
       }
 
@@ -5192,21 +5458,19 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const runtimeId = String(args?.runtimeId ?? "");
       const extensionName = String(args?.extensionName ?? "").trim().toLowerCase();
       const enabled = Boolean(args?.enabled);
-      const runtime = readMockRuntimes().find(
-        (item) => item.id === runtimeId && item.runtimeType === "php",
-      );
-      if (!runtime) {
+      const runtime = readMockRuntimes().find((item) => item.id === runtimeId);
+      if (!isMockPhpToolsRuntime(runtime)) {
         throw {
           code: "RUNTIME_NOT_FOUND",
-          message: "PHP runtime entry was not found.",
+          message: "PHP tools runtime entry was not found.",
         } satisfies AppError;
       }
 
-      const states = mockPhpExtensionsForRuntime(runtime.id, runtime.version);
+      const states = mockPhpExtensionsForRuntime(runtime.id, mockPhpToolsRuntimeLabel(runtime));
       if (!states.some((item) => item.extensionName === extensionName)) {
         throw {
           code: "PHP_EXTENSION_NOT_AVAILABLE",
-          message: `PHP ${runtime.version} does not expose the \`${extensionName}\` extension in browser mock mode.`,
+          message: `${mockPhpToolsRuntimeLabel(runtime)} does not expose the \`${extensionName}\` extension in browser mock mode.`,
         } satisfies AppError;
       }
 
@@ -5219,7 +5483,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
 
       return ({
         runtimeId: runtime.id,
-        runtimeVersion: runtime.version,
+        runtimeVersion: mockPhpToolsRuntimeLabel(runtime),
         extensionName,
         dllFile: `php_${extensionName}.dll`,
         enabled,
@@ -5228,29 +5492,28 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
     }
     case "list_php_functions": {
       const runtimeId = String(args?.runtimeId ?? "");
-      const runtime = readMockRuntimes().find(
-        (item) => item.id === runtimeId && item.runtimeType === "php",
-      );
-      if (!runtime) {
+      const runtime = readMockRuntimes().find((item) => item.id === runtimeId);
+      if (!isMockPhpToolsRuntime(runtime)) {
         throw {
           code: "RUNTIME_NOT_FOUND",
-          message: "PHP runtime entry was not found.",
+          message: "PHP tools runtime entry was not found.",
         } satisfies AppError;
       }
 
-      return mockPhpFunctionsForRuntime(runtime.id, runtime.version) as T;
+      return mockPhpFunctionsForRuntime(
+        runtime.id,
+        mockPhpToolsRuntimeLabel(runtime),
+      ) as T;
     }
     case "set_php_function_enabled": {
       const runtimeId = String(args?.runtimeId ?? "");
       const functionName = String(args?.functionName ?? "").trim().toLowerCase();
       const enabled = Boolean(args?.enabled);
-      const runtime = readMockRuntimes().find(
-        (item) => item.id === runtimeId && item.runtimeType === "php",
-      );
-      if (!runtime) {
+      const runtime = readMockRuntimes().find((item) => item.id === runtimeId);
+      if (!isMockPhpToolsRuntime(runtime)) {
         throw {
           code: "RUNTIME_NOT_FOUND",
-          message: "PHP runtime entry was not found.",
+          message: "PHP tools runtime entry was not found.",
         } satisfies AppError;
       }
 
@@ -5270,7 +5533,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
 
       return ({
         runtimeId: runtime.id,
-        runtimeVersion: runtime.version,
+        runtimeVersion: mockPhpToolsRuntimeLabel(runtime),
         functionName,
         enabled,
         updatedAt: timestamp,
@@ -5289,7 +5552,8 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       if (runtime.runtimeType !== "php" && !runtime.isActive) {
         throw {
           code: "RUNTIME_CONFIG_NOT_SUPPORTED",
-          message: "Only the active Apache, Nginx, or MySQL runtime exposes the managed config file.",
+          message:
+            "Only the active Apache, Nginx, FrankenPHP, or MySQL runtime exposes the managed config file.",
         } satisfies AppError;
       }
 
@@ -5308,7 +5572,8 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       if (runtime.runtimeType !== "php" && !runtime.isActive) {
         throw {
           code: "RUNTIME_CONFIG_NOT_SUPPORTED",
-          message: "Only the active Apache, Nginx, or MySQL runtime exposes the managed config file.",
+          message:
+            "Only the active Apache, Nginx, FrankenPHP, or MySQL runtime exposes the managed config file.",
         } satisfies AppError;
       }
 
@@ -5325,10 +5590,13 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         } satisfies AppError;
       }
 
-      if (runtime.runtimeType === "mysql") {
+      if (runtime.runtimeType === "mysql" || runtime.runtimeType === "frankenphp") {
         throw {
           code: "RUNTIME_CONFIG_NOT_SUPPORTED",
-          message: "MySQL currently supports opening the managed config file only.",
+          message:
+            runtime.runtimeType === "frankenphp"
+              ? "FrankenPHP currently supports opening the managed Caddyfile only."
+              : "MySQL currently supports opening the managed config file only.",
         } satisfies AppError;
       }
 
@@ -5366,7 +5634,8 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       if (runtime.runtimeType !== "php" && !runtime.isActive) {
         throw {
           code: "RUNTIME_CONFIG_NOT_SUPPORTED",
-          message: "Only the active Apache, Nginx, or MySQL runtime exposes the managed config file.",
+          message:
+            "Only the active Apache, Nginx, FrankenPHP, or MySQL runtime exposes the managed config file.",
         } satisfies AppError;
       }
 
@@ -5385,7 +5654,8 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       return ({
         id: `${runtimeType}-verified`,
         runtimeType,
-        version: runtimeType === "php" ? "8.2.12" : runtimeType === "apache" ? "2.4.54" : runtimeType === "nginx" ? "1.22.0" : "8.0.30",
+        version: mockRuntimeVersionForType(runtimeType),
+        phpFamily: mockRuntimePhpFamilyForType(runtimeType, mockRuntimeVersionForType(runtimeType)),
         path,
         isActive: false,
         source: "external",
@@ -5406,19 +5676,19 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         } satisfies AppError;
       }
 
-      const path =
-        targetPackage.runtimeType === "php"
-          ? `${MOCK_APP_DATA_ROOT}/runtimes/downloaded/php/${targetPackage.version}/php.exe`
-          : targetPackage.runtimeType === "apache"
-            ? `${MOCK_APP_DATA_ROOT}/runtimes/downloaded/apache/${targetPackage.version}/bin/httpd.exe`
-            : targetPackage.runtimeType === "nginx"
-              ? `${MOCK_APP_DATA_ROOT}/runtimes/downloaded/nginx/${targetPackage.version}/nginx.exe`
-              : `${MOCK_APP_DATA_ROOT}/runtimes/downloaded/mysql/${targetPackage.version}/bin/mysqld.exe`;
+      const path = mockManagedRuntimeBinaryPath(
+        targetPackage.runtimeType,
+        targetPackage.version,
+        "downloaded",
+      );
 
       const next = {
         id: `${targetPackage.runtimeType}-${targetPackage.version}`,
         runtimeType: targetPackage.runtimeType,
         version: targetPackage.version,
+        phpFamily:
+          targetPackage.phpFamily ??
+          mockRuntimePhpFamilyForType(targetPackage.runtimeType, targetPackage.version),
         path,
         isActive: setActive,
         source: "downloaded",
@@ -5460,12 +5730,12 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         } satisfies AppError;
       }
 
-      const version =
-        runtimeType === "php" ? "8.2.12" : runtimeType === "apache" ? "2.4.54" : runtimeType === "nginx" ? "1.22.0" : "8.0.30";
+      const version = mockRuntimeVersionForType(runtimeType);
       const next = {
         id: `${runtimeType}-${version}`,
         runtimeType,
         version,
+        phpFamily: mockRuntimePhpFamilyForType(runtimeType, version),
         path,
         isActive: setActive,
         source: "external",
@@ -5496,20 +5766,13 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         } satisfies AppError;
       }
 
-      const version =
-        runtimeType === "php" ? "8.2.12" : runtimeType === "apache" ? "2.4.54" : runtimeType === "nginx" ? "1.22.0" : "8.0.30";
-      const managedPath =
-        runtimeType === "php"
-          ? `${MOCK_APP_DATA_ROOT}/runtimes/php/${version}/php.exe`
-          : runtimeType === "apache"
-            ? `${MOCK_APP_DATA_ROOT}/runtimes/apache/${version}/bin/httpd.exe`
-            : runtimeType === "nginx"
-              ? `${MOCK_APP_DATA_ROOT}/runtimes/nginx/${version}/nginx.exe`
-              : `${MOCK_APP_DATA_ROOT}/runtimes/mysql/${version}/bin/mysqld.exe`;
+      const version = mockRuntimeVersionForType(runtimeType);
+      const managedPath = mockManagedRuntimeBinaryPath(runtimeType, version, "managed");
       const next = {
         id: `${runtimeType}-${version}`,
         runtimeType,
         version,
+        phpFamily: mockRuntimePhpFamilyForType(runtimeType, version),
         path: managedPath,
         isActive: setActive,
         source: "imported",
@@ -5567,10 +5830,18 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
 
       const dependentProjects = readMockProjects().filter((project) => {
         if (target.runtimeType === "php") {
-          return project.phpVersion === target.version;
+          return (
+            project.serverType !== "frankenphp" &&
+            mockPhpVersionFamily(project.phpVersion) === mockRuntimePhpFamilyForItem(target)
+          );
         }
 
-        if ((target.runtimeType === "apache" || target.runtimeType === "nginx") && target.isActive) {
+        if (
+          (target.runtimeType === "apache" ||
+            target.runtimeType === "nginx" ||
+            target.runtimeType === "frankenphp") &&
+          target.isActive
+        ) {
           return project.serverType === target.runtimeType;
         }
 

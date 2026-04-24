@@ -118,6 +118,20 @@
       "notes": "Official nginx for Windows stable build."
     },
     {
+      "id": "frankenphp-1.12.2-win-x64",
+      "runtimeType": "frankenphp",
+      "version": "1.12.2",
+      "phpFamily": "8.5",
+      "platform": "windows",
+      "arch": "x64",
+      "displayName": "FrankenPHP 1.12.2",
+      "downloadUrl": "https://github.com/php/frankenphp/releases/download/v1.12.2/frankenphp-windows-x86_64.zip",
+      "checksumSha256": "dcc70782d2409fb5d1434b77f031f1fa98f51417c45d2e063d21df52762cbc80",
+      "archiveKind": "zip",
+      "entryBinary": "frankenphp.exe",
+      "notes": "Official FrankenPHP Windows standalone binary with embedded PHP 8.5."
+    },
+    {
       "id": "php-8.5.5-win-x64",
       "runtimeType": "php",
       "version": "8.5.5",

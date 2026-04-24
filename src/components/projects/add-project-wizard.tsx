@@ -7,12 +7,28 @@ import { configApi } from "@/lib/api/config-api";
 import { projectApi } from "@/lib/api/project-api";
 import { runtimeApi } from "@/lib/api/runtime-api";
 import { serviceApi } from "@/lib/api/service-api";
-import { installedPhpVersionFamilies } from "@/lib/runtime-version";
+import {
+  activeFrankenphpVersionFamily,
+  frankenphpVersionFamilies,
+  installedPhpVersionFamilies,
+  runtimeVersionMatches,
+} from "@/lib/runtime-version";
 import { documentRootSchema, domainSchema, projectNameSchema, projectPathSchema } from "@/lib/validators";
 import type { CreateProjectInput, Project, ScanResult } from "@/types/project";
 import type { RuntimeInventoryItem } from "@/types/runtime";
 
 const steps = ["Select Folder", "Scan Results", "Configure", "Review", "Complete"];
+
+function serverTypeLabel(serverType: CreateProjectInput["serverType"]): string {
+  switch (serverType) {
+    case "apache":
+      return "Apache";
+    case "nginx":
+      return "Nginx";
+    case "frankenphp":
+      return "FrankenPHP";
+  }
+}
 
 interface AddProjectWizardProps {
   open: boolean;
@@ -140,8 +156,31 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
     () => Array.from(new Set(recentPaths.filter(Boolean))).slice(0, 5),
     [recentPaths],
   );
+  const activeFrankenphpPhpFamily = useMemo(
+    () => activeFrankenphpVersionFamily(runtimeInventory),
+    [runtimeInventory],
+  );
+  const trackedFrankenphpPhpFamilies = useMemo(
+    () => frankenphpVersionFamilies(runtimeInventory),
+    [runtimeInventory],
+  );
   const phpVersionOptions = useMemo(
     () => {
+      if (form.serverType === "frankenphp") {
+        const embeddedFamilies =
+          activeFrankenphpPhpFamily != null
+            ? [activeFrankenphpPhpFamily]
+            : trackedFrankenphpPhpFamilies;
+        const options = [...embeddedFamilies];
+        if (form.phpVersion && !options.includes(form.phpVersion)) {
+          options.push(form.phpVersion);
+        }
+
+        return Array.from(new Set(options)).sort((left, right) =>
+          left.localeCompare(right, undefined, { numeric: true }),
+        );
+      }
+
       const installed = installedPhpVersionFamilies(runtimeInventory);
       if (form.phpVersion && !installed.includes(form.phpVersion)) {
         return [...installed, form.phpVersion].sort((left, right) =>
@@ -150,8 +189,37 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
       }
       return installed;
     },
-    [form.phpVersion, runtimeInventory],
+    [
+      activeFrankenphpPhpFamily,
+      form.phpVersion,
+      form.serverType,
+      runtimeInventory,
+      trackedFrankenphpPhpFamilies,
+    ],
   );
+  const frankenphpPhpLocked =
+    form.serverType === "frankenphp" && activeFrankenphpPhpFamily != null;
+
+  useEffect(() => {
+    if (!open || form.serverType !== "frankenphp" || !activeFrankenphpPhpFamily) {
+      return;
+    }
+
+    if (runtimeVersionMatches(form.phpVersion, activeFrankenphpPhpFamily)) {
+      return;
+    }
+
+    setForm((current) => {
+      if (
+        current.serverType !== "frankenphp" ||
+        runtimeVersionMatches(current.phpVersion, activeFrankenphpPhpFamily)
+      ) {
+        return current;
+      }
+
+      return { ...current, phpVersion: activeFrankenphpPhpFamily };
+    });
+  }, [activeFrankenphpPhpFamily, form.phpVersion, form.serverType, open]);
 
   function resetWizard() {
     setStepIndex(0);
@@ -271,7 +339,7 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
 
       try {
         await configApi.generate(created.id);
-        nextNotes.push(`${created.serverType === "apache" ? "Apache" : "Nginx"} config generated.`);
+        nextNotes.push(`${serverTypeLabel(created.serverType)} config generated.`);
 
         await configApi.applyHosts(created.domain);
         nextNotes.push(`${created.domain} added to local hosts.`);
@@ -279,13 +347,9 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
         const service = await serviceApi.get(created.serverType);
         if (service.status === "running") {
           await serviceApi.restart(created.serverType);
-          nextNotes.push(
-            `${created.serverType === "apache" ? "Apache" : "Nginx"} restarted.`,
-          );
+          nextNotes.push(`${serverTypeLabel(created.serverType)} restarted.`);
         } else {
-          nextNotes.push(
-            `${created.serverType === "apache" ? "Apache" : "Nginx"} is stopped, so restart was skipped.`,
-          );
+          nextNotes.push(`${serverTypeLabel(created.serverType)} is stopped, so restart was skipped.`);
         }
       } catch (provisionError) {
         const nextMessage = provisioningMessage(provisionError);
@@ -591,21 +655,30 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
                     className="select"
                     id="wizard-server"
                     onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        serverType: event.target.value as CreateProjectInput["serverType"],
-                      }))
+                      setForm((current) => {
+                        const serverType = event.target.value as CreateProjectInput["serverType"];
+                        return {
+                          ...current,
+                          serverType,
+                          phpVersion:
+                            serverType === "frankenphp" && activeFrankenphpPhpFamily
+                              ? activeFrankenphpPhpFamily
+                              : current.phpVersion,
+                        };
+                      })
                     }
                     value={form.serverType}
                   >
                     <option value="apache">Apache</option>
                     <option value="nginx">Nginx</option>
+                    <option value="frankenphp">FrankenPHP (Experimental)</option>
                   </select>
                 </div>
                 <div className="field">
                   <label htmlFor="wizard-php">PHP Version</label>
                   <select
                     className="select"
+                    disabled={frankenphpPhpLocked}
                     id="wizard-php"
                     onChange={(event) => setForm((current) => ({ ...current, phpVersion: event.target.value }))}
                     value={form.phpVersion}
@@ -616,6 +689,15 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
                       </option>
                     ))}
                   </select>
+                  {form.serverType === "frankenphp" ? (
+                    <span className="helper-text">
+                      {activeFrankenphpPhpFamily
+                        ? `Active FrankenPHP embeds PHP ${activeFrankenphpPhpFamily}. DevNest keeps this project synced to that embedded PHP family; switch the active FrankenPHP runtime in Settings to change it.`
+                        : trackedFrankenphpPhpFamilies.length > 0
+                          ? "FrankenPHP does not need a standalone PHP runtime. Pick the embedded PHP family you want, then activate a matching FrankenPHP runtime in Settings."
+                          : "FrankenPHP does not need a standalone PHP runtime. Install or link FrankenPHP first, then DevNest will sync this project to its embedded PHP family."}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="field">
                   <label htmlFor="wizard-framework">Framework</label>
@@ -675,6 +757,17 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
                 </div>
               </div>
 
+              {form.serverType === "frankenphp" ? (
+                <div className="inline-note-card" data-tone="warning">
+                  <strong>Experimental web server</strong>
+                  <span>
+                    {activeFrankenphpPhpFamily
+                      ? `FrankenPHP runs with its own embedded PHP runtime on Windows. This project is pinned to the active FrankenPHP PHP ${activeFrankenphpPhpFamily} family.`
+                      : "FrankenPHP runs with its own embedded PHP runtime on Windows. No separate PHP install is required, but DevNest still validates the embedded PHP family before start."}
+                  </span>
+                </div>
+              ) : null}
+
               <label className="checkbox-row">
                 <input
                   checked={form.sslEnabled}
@@ -706,7 +799,7 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
                 </div>
                 <div className="detail-item">
                   <span className="detail-label">Server</span>
-                  <strong>{form.serverType}</strong>
+                  <strong>{serverTypeLabel(form.serverType)}</strong>
                 </div>
                 <div className="detail-item">
                   <span className="detail-label">PHP</span>
@@ -727,9 +820,16 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
                   <span className="detail-label">Provisioning Summary</span>
                   <div className="stack" style={{ gap: 8 }}>
                     <span className="helper-text">Save the project to the local registry.</span>
-                    <span className="helper-text">Generate managed {form.serverType} config for <span className="mono">{form.domain}</span>.</span>
+                    <span className="helper-text">Generate managed {serverTypeLabel(form.serverType)} config for <span className="mono">{form.domain}</span>.</span>
                     <span className="helper-text">Use <span className="mono">{form.documentRoot}</span> as the document root.</span>
                     <span className="helper-text">Apply hosts changes when permission is available.</span>
+                    {form.serverType === "frankenphp" ? (
+                      <span className="helper-text">
+                        {activeFrankenphpPhpFamily
+                          ? `Use embedded PHP ${activeFrankenphpPhpFamily} from the active FrankenPHP runtime. No standalone PHP install is required.`
+                          : "Use the embedded PHP family from a matching FrankenPHP runtime. No standalone PHP install is required."}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -757,7 +857,7 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
                   </div>
                   <div className="detail-item">
                     <span className="detail-label">Server</span>
-                    <strong>{createdProject.serverType}</strong>
+                    <strong>{serverTypeLabel(createdProject.serverType)}</strong>
                   </div>
                   <div className="detail-item">
                     <span className="detail-label">PHP</span>

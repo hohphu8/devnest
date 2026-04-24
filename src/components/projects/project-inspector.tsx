@@ -16,8 +16,14 @@ import { projectApi } from "@/lib/api/project-api";
 import { runtimeApi } from "@/lib/api/runtime-api";
 import { summarizeDiagnostics, getLiveProjectStatus, getStatusTone } from "@/lib/project-health";
 import { formatServiceLogPreview } from "@/lib/service-logs";
-import { installedPhpVersionFamilies, runtimeVersionMatches } from "@/lib/runtime-version";
+import {
+  activeFrankenphpVersionFamily,
+  frankenphpVersionFamilies,
+  installedPhpVersionFamilies,
+  runtimeVersionMatches,
+} from "@/lib/runtime-version";
 import { serviceApi } from "@/lib/api/service-api";
+import { serviceActionLabel } from "@/lib/action-labels";
 import { getAppErrorMessage } from "@/lib/tauri";
 import { documentRootSchema, domainSchema, envVarKeySchema, envVarValueSchema, projectNameSchema } from "@/lib/validators";
 import { formatUpdatedAt } from "@/lib/utils";
@@ -265,6 +271,36 @@ export function ProjectInspector({
     runtimeApi.list().then(setRuntimeInventory).catch(() => setRuntimeInventory([]));
   }, [actionName, activeTab, project]);
 
+  useEffect(() => {
+    if (!project) {
+      return;
+    }
+
+    const serverType = draft.serverType ?? project.serverType;
+    const activePhpFamily = activeFrankenphpVersionFamily(runtimeInventory);
+    if (serverType !== "frankenphp" || !activePhpFamily) {
+      return;
+    }
+
+    const phpVersion = draft.phpVersion ?? project.phpVersion;
+    if (runtimeVersionMatches(phpVersion, activePhpFamily)) {
+      return;
+    }
+
+    setDraft((current) => {
+      const nextServerType = current.serverType ?? project.serverType;
+      const nextPhpVersion = current.phpVersion ?? project.phpVersion;
+      if (
+        nextServerType !== "frankenphp" ||
+        runtimeVersionMatches(nextPhpVersion, activePhpFamily)
+      ) {
+        return current;
+      }
+
+      return { ...current, phpVersion: activePhpFamily };
+    });
+  }, [draft.phpVersion, draft.serverType, project, runtimeInventory]);
+
   const projectDiagnostics = project ? diagnosticsByProject[project.id] : undefined;
 
   useEffect(() => {
@@ -395,6 +431,8 @@ export function ProjectInspector({
   }
 
   const currentProject = project;
+  const draftServerType = draft.serverType ?? currentProject.serverType;
+  const draftPhpVersion = draft.phpVersion ?? currentProject.phpVersion;
   const diagnostics = diagnosticsByProject[currentProject.id] ?? [];
   const diagnosticsSummary = summarizeDiagnostics(diagnostics);
   const runtimeService = services.find((service) => service.name === currentProject.serverType);
@@ -424,7 +462,21 @@ export function ProjectInspector({
   const diagnosticsLoading = loadingProjectId === currentProject.id;
   const lastRunAt = lastRunAtByProject[currentProject.id];
   const runtimeCompatibilityIssues: string[] = [];
-  const phpVersionOptions = installedPhpVersionFamilies(runtimeInventory);
+  const activeFrankenphpPhpFamily = activeFrankenphpVersionFamily(runtimeInventory);
+  const trackedFrankenphpPhpFamilies = frankenphpVersionFamilies(runtimeInventory);
+  const phpVersionOptions =
+    draftServerType === "frankenphp"
+      ? Array.from(
+          new Set(
+            [
+              ...(activeFrankenphpPhpFamily ? [activeFrankenphpPhpFamily] : trackedFrankenphpPhpFamilies),
+              draftPhpVersion,
+            ].filter(Boolean),
+          ),
+        ).sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+      : installedPhpVersionFamilies(runtimeInventory);
+  const frankenphpPhpLocked =
+    draftServerType === "frankenphp" && activeFrankenphpPhpFamily != null;
   const tabItems: Array<{ id: ProjectInspectorTab; label: string; meta: string }> = [
     { id: "overview", label: "Overview", meta: currentProject.domain },
     { id: "provisioning", label: "Provisioning", meta: "Config, hosts, tunnel" },
@@ -542,7 +594,13 @@ export function ProjectInspector({
     );
   }
 
-  if (!activePhpRuntime) {
+  if (currentProject.serverType === "frankenphp") {
+    if (activeServerRuntime?.phpFamily && !runtimeVersionMatches(currentProject.phpVersion, activeServerRuntime.phpFamily)) {
+      runtimeCompatibilityIssues.push(
+        `This project expects PHP ${currentProject.phpVersion}, but the active FrankenPHP runtime embeds PHP ${activeServerRuntime.phpFamily}. Switch FrankenPHP runtimes or update the project profile.`,
+      );
+    }
+  } else if (!activePhpRuntime) {
     runtimeCompatibilityIssues.push(
       `No PHP ${currentProject.phpVersion} runtime is linked. Import or link that PHP version in Settings.`,
     );
@@ -633,7 +691,7 @@ export function ProjectInspector({
         pushToast({
           tone: "success",
           title: "Runtime stopped",
-          message: `${currentProject.serverType} stopped for ${currentProject.name}.`,
+          message: `${serviceActionLabel("stop", currentProject.serverType).replace("Stopping ", "").replace("...", "")} stopped for ${currentProject.name}.`,
         });
       } else {
         const report = await reliabilityApi.runPreflight(
@@ -656,7 +714,7 @@ export function ProjectInspector({
         pushToast({
           tone: "success",
           title: "Runtime started",
-          message: `${currentProject.serverType} started for ${currentProject.name}.`,
+          message: `${serviceActionLabel("start", currentProject.serverType).replace("Starting ", "").replace("...", "")} started for ${currentProject.name}.`,
         });
       }
     } catch (error) {
@@ -1105,7 +1163,11 @@ export function ProjectInspector({
               <div className="detail-item">
                 <span className="detail-label">PHP Runtime</span>
                 <strong>
-                  {activePhpRuntime
+                  {currentProject.serverType === "frankenphp"
+                    ? activeServerRuntime?.phpFamily
+                      ? `Embedded PHP ${activeServerRuntime.phpFamily}`
+                      : "Embedded PHP family unavailable"
+                    : activePhpRuntime
                     ? `${activePhpRuntime.version} (${activePhpRuntime.status})`
                     : `No PHP ${currentProject.phpVersion} runtime linked`}
                 </strong>
@@ -1119,7 +1181,9 @@ export function ProjectInspector({
               <div className="detail-item">
                 <span className="detail-label">PHP Runtime Path</span>
                 <strong className="mono detail-value">
-                  {activePhpRuntime?.path ?? "Open Settings to link the selected PHP runtime."}
+                  {currentProject.serverType === "frankenphp"
+                    ? activeServerRuntime?.path ?? "Open Settings to link the selected FrankenPHP runtime."
+                    : activePhpRuntime?.path ?? "Open Settings to link the selected PHP runtime."}
                 </strong>
               </div>
             </div>
@@ -1629,29 +1693,38 @@ export function ProjectInspector({
                   className="select"
                   id="inspector-server"
                   onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      serverType: event.target.value as UpdateProjectPatch["serverType"],
-                    }))
+                    setDraft((current) => {
+                      const serverType = event.target.value as UpdateProjectPatch["serverType"];
+                      return {
+                        ...current,
+                        serverType,
+                        phpVersion:
+                          serverType === "frankenphp" && activeFrankenphpPhpFamily
+                            ? activeFrankenphpPhpFamily
+                            : current.phpVersion,
+                      };
+                    })
                   }
-                  value={draft.serverType ?? project.serverType}
+                  value={draftServerType}
                 >
                   <option value="apache">Apache</option>
                   <option value="nginx">Nginx</option>
+                  <option value="frankenphp">FrankenPHP (Experimental)</option>
                 </select>
               </div>
               <div className="field">
                 <label htmlFor="inspector-php">PHP Version</label>
                 <select
                   className="select"
+                  disabled={frankenphpPhpLocked}
                   id="inspector-php"
                   onChange={(event) => setDraft((current) => ({ ...current, phpVersion: event.target.value }))}
-                  value={draft.phpVersion ?? ""}
+                  value={draftPhpVersion}
                 >
                   {(
-                    phpVersionOptions.includes(draft.phpVersion ?? "")
+                    phpVersionOptions.includes(draftPhpVersion)
                       ? phpVersionOptions
-                      : [...phpVersionOptions, draft.phpVersion ?? project.phpVersion].filter(Boolean)
+                      : [...phpVersionOptions, draftPhpVersion].filter(Boolean)
                   )
                     .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
                     .map((version) => (
@@ -1660,6 +1733,15 @@ export function ProjectInspector({
                       </option>
                     ))}
                 </select>
+                {draftServerType === "frankenphp" ? (
+                  <span className="helper-text">
+                    {activeFrankenphpPhpFamily
+                      ? `Active FrankenPHP embeds PHP ${activeFrankenphpPhpFamily}. DevNest keeps this project synced to that embedded PHP family; switch the active FrankenPHP runtime in Settings to change it.`
+                      : trackedFrankenphpPhpFamilies.length > 0
+                        ? "FrankenPHP does not need a standalone PHP runtime. Pick the embedded PHP family you want, then activate a matching FrankenPHP runtime in Settings."
+                        : "FrankenPHP does not need a standalone PHP runtime. Install or link FrankenPHP first, then DevNest will sync this project to its embedded PHP family."}
+                  </span>
+                ) : null}
               </div>
               <div className="field">
                 <label htmlFor="inspector-framework">Framework</label>
@@ -1742,6 +1824,17 @@ export function ProjectInspector({
                 />
               </div>
             </div>
+
+            {draftServerType === "frankenphp" ? (
+              <div className="inline-note-card" data-tone="warning">
+                <strong>Embedded PHP runtime</strong>
+                <span>
+                  {activeFrankenphpPhpFamily
+                    ? `This project is pinned to embedded PHP ${activeFrankenphpPhpFamily} from the active FrankenPHP runtime. No separate PHP install is required.`
+                    : "FrankenPHP carries its own embedded PHP runtime. No separate PHP install is required, but DevNest still validates the embedded PHP family before start."}
+                </span>
+              </div>
+            ) : null}
 
             <label className="checkbox-row">
               <input

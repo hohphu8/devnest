@@ -729,6 +729,7 @@ export function RecipeStudio() {
               >
                 <option value="apache">Apache</option>
                 <option value="nginx">Nginx</option>
+                <option value="frankenphp">FrankenPHP (Experimental)</option>
               </select>
             </div>
           </div>
@@ -763,7 +764,7 @@ export function RecipeStudio() {
               </Button>
             }
             description="Scaffold a Composer-based WordPress install and track it with sane local defaults."
-            helper="Uses the johnpbloch/wordpress package. Apache is the default, but Nginx is available if that matches the site better."
+            helper="Uses the johnpbloch/wordpress package. Apache is the default, but Nginx or FrankenPHP are available if they match the workspace better."
             title="New WordPress Site"
           >
           <div className="form-grid">
@@ -836,6 +837,7 @@ export function RecipeStudio() {
               >
                 <option value="apache">Apache</option>
                 <option value="nginx">Nginx</option>
+                <option value="frankenphp">FrankenPHP (Experimental)</option>
               </select>
             </div>
           </div>
@@ -963,6 +965,7 @@ export function RecipeStudio() {
             >
               <option value="apache">Apache</option>
               <option value="nginx">Nginx</option>
+              <option value="frankenphp">FrankenPHP (Experimental)</option>
             </select>
           </div>
         </div>

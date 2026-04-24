@@ -7,6 +7,7 @@ pub enum RuntimeType {
     Php,
     Apache,
     Nginx,
+    Frankenphp,
     Mysql,
 }
 
@@ -16,6 +17,7 @@ impl RuntimeType {
             Self::Php => "php",
             Self::Apache => "apache",
             Self::Nginx => "nginx",
+            Self::Frankenphp => "frankenphp",
             Self::Mysql => "mysql",
         }
     }
@@ -29,6 +31,7 @@ impl FromStr for RuntimeType {
             "php" => Ok(Self::Php),
             "apache" => Ok(Self::Apache),
             "nginx" => Ok(Self::Nginx),
+            "frankenphp" => Ok(Self::Frankenphp),
             "mysql" => Ok(Self::Mysql),
             _ => Err("Invalid runtime type"),
         }
@@ -69,6 +72,7 @@ pub struct RuntimeInventoryItem {
     pub id: String,
     pub runtime_type: RuntimeType,
     pub version: String,
+    pub php_family: Option<String>,
     pub path: String,
     pub is_active: bool,
     pub source: RuntimeSource,
@@ -96,6 +100,7 @@ pub struct RuntimePackage {
     pub id: String,
     pub runtime_type: RuntimeType,
     pub version: String,
+    pub php_family: Option<String>,
     pub platform: String,
     pub arch: String,
     pub display_name: String,
@@ -158,6 +163,13 @@ pub enum PhpExtensionPackageKind {
     Binary,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PhpExtensionThreadSafety {
+    Ts,
+    Nts,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhpExtensionPackageManifest {
@@ -170,6 +182,7 @@ pub struct PhpExtensionPackage {
     pub id: String,
     pub extension_name: String,
     pub php_family: String,
+    pub thread_safety: Option<PhpExtensionThreadSafety>,
     pub version: String,
     pub platform: String,
     pub arch: String,

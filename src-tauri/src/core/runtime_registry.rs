@@ -28,6 +28,7 @@ const SUPPORTED_PHP_FAMILIES: &[&str] = &["7.4", "8.0", "8.1", "8.2", "8.3", "8.
 pub struct RuntimeCommand {
     pub binary_path: PathBuf,
     pub args: Vec<String>,
+    pub env_vars: HashMap<String, String>,
     pub working_dir: Option<PathBuf>,
     pub port: Option<u16>,
     pub log_path: PathBuf,
@@ -41,6 +42,7 @@ fn service_log_env_key(service: &ServiceName) -> &'static str {
     match service {
         ServiceName::Apache => "DEVNEST_LOG_APACHE",
         ServiceName::Nginx => "DEVNEST_LOG_NGINX",
+        ServiceName::Frankenphp => "DEVNEST_LOG_FRANKENPHP",
         ServiceName::Mysql => "DEVNEST_LOG_MYSQL",
         ServiceName::Mailpit => "DEVNEST_LOG_MAILPIT",
         ServiceName::Redis => "DEVNEST_LOG_REDIS",
@@ -51,6 +53,7 @@ fn service_bin_env_key(service: &ServiceName) -> &'static str {
     match service {
         ServiceName::Apache => "DEVNEST_RUNTIME_APACHE_BIN",
         ServiceName::Nginx => "DEVNEST_RUNTIME_NGINX_BIN",
+        ServiceName::Frankenphp => "DEVNEST_RUNTIME_FRANKENPHP_BIN",
         ServiceName::Mysql => "DEVNEST_RUNTIME_MYSQL_BIN",
         ServiceName::Mailpit => "DEVNEST_RUNTIME_MAILPIT_BIN",
         ServiceName::Redis => "DEVNEST_RUNTIME_REDIS_BIN",
@@ -61,6 +64,7 @@ fn service_args_env_key(service: &ServiceName) -> &'static str {
     match service {
         ServiceName::Apache => "DEVNEST_RUNTIME_APACHE_ARGS",
         ServiceName::Nginx => "DEVNEST_RUNTIME_NGINX_ARGS",
+        ServiceName::Frankenphp => "DEVNEST_RUNTIME_FRANKENPHP_ARGS",
         ServiceName::Mysql => "DEVNEST_RUNTIME_MYSQL_ARGS",
         ServiceName::Mailpit => "DEVNEST_RUNTIME_MAILPIT_ARGS",
         ServiceName::Redis => "DEVNEST_RUNTIME_REDIS_ARGS",
@@ -71,6 +75,7 @@ fn service_cwd_env_key(service: &ServiceName) -> &'static str {
     match service {
         ServiceName::Apache => "DEVNEST_RUNTIME_APACHE_CWD",
         ServiceName::Nginx => "DEVNEST_RUNTIME_NGINX_CWD",
+        ServiceName::Frankenphp => "DEVNEST_RUNTIME_FRANKENPHP_CWD",
         ServiceName::Mysql => "DEVNEST_RUNTIME_MYSQL_CWD",
         ServiceName::Mailpit => "DEVNEST_RUNTIME_MAILPIT_CWD",
         ServiceName::Redis => "DEVNEST_RUNTIME_REDIS_CWD",
@@ -81,6 +86,7 @@ fn service_port_env_key(service: &ServiceName) -> &'static str {
     match service {
         ServiceName::Apache => "DEVNEST_RUNTIME_APACHE_PORT",
         ServiceName::Nginx => "DEVNEST_RUNTIME_NGINX_PORT",
+        ServiceName::Frankenphp => "DEVNEST_RUNTIME_FRANKENPHP_PORT",
         ServiceName::Mysql => "DEVNEST_RUNTIME_MYSQL_PORT",
         ServiceName::Mailpit => "DEVNEST_RUNTIME_MAILPIT_PORT",
         ServiceName::Redis => "DEVNEST_RUNTIME_REDIS_PORT",
@@ -91,6 +97,7 @@ fn service_version_env_key(service: &ServiceName) -> &'static str {
     match service {
         ServiceName::Apache => "DEVNEST_RUNTIME_APACHE_VERSION",
         ServiceName::Nginx => "DEVNEST_RUNTIME_NGINX_VERSION",
+        ServiceName::Frankenphp => "DEVNEST_RUNTIME_FRANKENPHP_VERSION",
         ServiceName::Mysql => "DEVNEST_RUNTIME_MYSQL_VERSION",
         ServiceName::Mailpit => "DEVNEST_RUNTIME_MAILPIT_VERSION",
         ServiceName::Redis => "DEVNEST_RUNTIME_REDIS_VERSION",
@@ -172,6 +179,11 @@ fn service_candidates(service: &ServiceName) -> Vec<PathBuf> {
             PathBuf::from(r"C:\laragon\bin\nginx\nginx.exe"),
             PathBuf::from(r"C:\Program Files\nginx\nginx.exe"),
         ],
+        ServiceName::Frankenphp => vec![
+            PathBuf::from(r"C:\frankenphp\frankenphp.exe"),
+            PathBuf::from(r"C:\Program Files\FrankenPHP\frankenphp.exe"),
+            PathBuf::from(r"C:\Program Files\frankenphp\frankenphp.exe"),
+        ],
         ServiceName::Mysql => vec![
             PathBuf::from(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqld.exe"),
             PathBuf::from(r"C:\xampp\mysql\bin\mysqld.exe"),
@@ -199,6 +211,9 @@ fn discover_service_binary(service: &ServiceName) -> Option<PathBuf> {
     first_existing_path(&service_candidates(service)).or_else(|| match service {
         ServiceName::Apache => find_in_path("httpd.exe"),
         ServiceName::Nginx => find_in_path("nginx.exe"),
+        ServiceName::Frankenphp => {
+            find_in_path("frankenphp.exe").or_else(|| find_in_path("frankenphp"))
+        }
         ServiceName::Mysql => find_in_path("mysqld.exe"),
         ServiceName::Mailpit => find_in_path("mailpit.exe").or_else(|| find_in_path("mailpit")),
         ServiceName::Redis => {
@@ -236,6 +251,7 @@ fn service_runtime_type(service: &ServiceName) -> Option<RuntimeType> {
     match service {
         ServiceName::Apache => Some(RuntimeType::Apache),
         ServiceName::Nginx => Some(RuntimeType::Nginx),
+        ServiceName::Frankenphp => Some(RuntimeType::Frankenphp),
         ServiceName::Mysql => Some(RuntimeType::Mysql),
         ServiceName::Mailpit => None,
         ServiceName::Redis => None,
@@ -259,6 +275,7 @@ fn discover_bundled_service_binaries(resources_dir: &Path, service: &ServiceName
         .map(|path| match service {
             ServiceName::Apache => path.join("bin").join("httpd.exe"),
             ServiceName::Nginx => path.join("nginx.exe"),
+            ServiceName::Frankenphp => path.join("frankenphp.exe"),
             ServiceName::Mysql => path.join("bin").join("mysqld.exe"),
             ServiceName::Mailpit => path.join("mailpit.exe"),
             ServiceName::Redis => path.join("redis-server.exe"),
@@ -280,7 +297,7 @@ fn discover_bundled_php_binaries(resources_dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn runtime_version_family(version: &str) -> String {
+pub(crate) fn runtime_version_family(version: &str) -> String {
     let mut parts = version.trim().split('.');
     let major = parts.next().unwrap_or_default();
     let minor = parts.next().unwrap_or_default();
@@ -560,15 +577,11 @@ pub fn php_extension_enabled_by_default(extension_name: &str) -> bool {
         && !normalized.starts_with("oci8")
 }
 
-pub fn available_php_extensions(runtime_home: &Path) -> Vec<String> {
-    let ext_dir = runtime_home.join("ext");
-    let entries = match fs::read_dir(ext_dir) {
-        Ok(entries) => entries,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut extensions = entries
-        .filter_map(|entry| entry.ok())
+fn available_php_extensions_from_dirs(extension_dirs: &[PathBuf]) -> Vec<String> {
+    let mut extensions = extension_dirs
+        .iter()
+        .filter_map(|ext_dir| fs::read_dir(ext_dir).ok())
+        .flat_map(|entries| entries.filter_map(|entry| entry.ok()))
         .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
         .filter_map(|file_name| normalize_php_extension_name(&file_name))
         .collect::<Vec<_>>();
@@ -576,6 +589,10 @@ pub fn available_php_extensions(runtime_home: &Path) -> Vec<String> {
     extensions.sort();
     extensions.dedup();
     extensions
+}
+
+pub fn available_php_extensions(runtime_home: &Path) -> Vec<String> {
+    available_php_extensions_from_dirs(&[runtime_home.join("ext")])
 }
 
 pub fn managed_php_functions() -> Vec<String> {
@@ -595,16 +612,59 @@ pub fn managed_php_functions() -> Vec<String> {
     .collect()
 }
 
-fn enabled_php_extensions(runtime_home: &Path, overrides: &HashMap<String, bool>) -> Vec<String> {
-    available_php_extensions(runtime_home)
-        .into_iter()
+fn enabled_php_extensions_from_available(
+    available_extensions: &[String],
+    overrides: &HashMap<String, bool>,
+) -> Vec<String> {
+    available_extensions
+        .iter()
         .filter(|extension| {
             overrides
-                .get(extension)
+                .get(extension.as_str())
                 .copied()
                 .unwrap_or_else(|| php_extension_enabled_by_default(extension))
         })
+        .cloned()
         .collect()
+}
+
+pub fn frankenphp_overlay_ext_dir(workspace_dir: &Path, php_family: &str) -> PathBuf {
+    managed_service_state_dir(workspace_dir, &ServiceName::Frankenphp)
+        .join("extensions")
+        .join(php_family.replace('/', "-"))
+}
+
+pub fn frankenphp_available_php_extensions(
+    runtime_home: &Path,
+    workspace_dir: &Path,
+    php_family: &str,
+) -> Vec<String> {
+    available_php_extensions_from_dirs(&[
+        runtime_home.join("ext"),
+        frankenphp_overlay_ext_dir(workspace_dir, php_family),
+    ])
+}
+
+fn php_extension_directive_value(
+    runtime_home: &Path,
+    overlay_ext_dir: Option<&Path>,
+    extension_name: &str,
+) -> String {
+    let dll_file = format!("php_{extension_name}.dll");
+
+    if let Some(overlay_ext_dir) = overlay_ext_dir {
+        let overlay_path = overlay_ext_dir.join(&dll_file);
+        if path_exists(&overlay_path) {
+            return format!("\"{}\"", normalize_for_config(&overlay_path));
+        }
+    }
+
+    let bundled_path = runtime_home.join("ext").join(&dll_file);
+    if path_exists(&bundled_path) {
+        return dll_file;
+    }
+
+    dll_file
 }
 
 fn is_zend_php_extension(extension_name: &str) -> bool {
@@ -618,14 +678,16 @@ fn disabled_php_functions(overrides: &HashMap<String, bool>) -> Vec<String> {
         .collect()
 }
 
-fn build_php_fastcgi_config(
+fn build_php_runtime_config(
     connection: &Connection,
     runtime_home: &Path,
-    workspace_dir: &Path,
+    state_dir: &Path,
+    error_log_path: &Path,
     version: &str,
     runtime_id: Option<&str>,
+    available_extensions: &[String],
+    overlay_ext_dir: Option<&Path>,
 ) -> Result<PathBuf, AppError> {
-    let state_dir = managed_php_state_dir(workspace_dir, version);
     let temp_dir = state_dir.join("tmp");
     let session_dir = state_dir.join("session");
     fs::create_dir_all(&temp_dir).map_err(|error| {
@@ -648,7 +710,7 @@ fn build_php_fastcgi_config(
             connection,
             runtime_id,
             version,
-            &available_php_extensions(runtime_home),
+            available_extensions,
         )?
         .into_iter()
         .map(|item| (item.extension_name, item.enabled))
@@ -670,17 +732,28 @@ fn build_php_fastcgi_config(
         HashMap::new()
     };
 
-    let enabled_extensions = enabled_php_extensions(runtime_home, &extension_overrides);
+    let enabled_extensions =
+        enabled_php_extensions_from_available(available_extensions, &extension_overrides);
     let zend_extension_lines = enabled_extensions
         .iter()
         .filter(|extension| is_zend_php_extension(extension))
-        .map(|extension| format!("zend_extension=php_{extension}.dll"))
+        .map(|extension| {
+            format!(
+                "zend_extension={}",
+                php_extension_directive_value(runtime_home, overlay_ext_dir, extension)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let extension_lines = enabled_extensions
         .iter()
         .filter(|extension| !is_zend_php_extension(extension))
-        .map(|extension| format!("extension=php_{extension}.dll"))
+        .map(|extension| {
+            format!(
+                "extension={}",
+                php_extension_directive_value(runtime_home, overlay_ext_dir, extension)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let disabled_functions = disabled_php_functions(&function_overrides).join(",");
@@ -734,10 +807,7 @@ fn build_php_fastcgi_config(
         extension_dir = normalize_for_config(&runtime_home.join("ext")),
         temp_dir = normalize_for_config(&temp_dir),
         session_dir = normalize_for_config(&session_dir),
-        error_log = normalize_for_config(
-            &service_log_path(workspace_dir, &ServiceName::Apache)
-                .with_file_name(format!("php-{version}.log"))
-        ),
+        error_log = normalize_for_config(error_log_path),
         display_errors = if runtime_config.display_errors {
             "On"
         } else {
@@ -752,6 +822,58 @@ fn build_php_fastcgi_config(
     write_text_file(&config_path, &content)?;
 
     Ok(config_path)
+}
+
+fn build_php_fastcgi_config(
+    connection: &Connection,
+    runtime_home: &Path,
+    workspace_dir: &Path,
+    version: &str,
+    runtime_id: Option<&str>,
+) -> Result<PathBuf, AppError> {
+    let state_dir = managed_php_state_dir(workspace_dir, version);
+    let error_log_path = service_log_path(workspace_dir, &ServiceName::Apache)
+        .with_file_name(format!("php-{version}.log"));
+    let available_extensions = available_php_extensions(runtime_home);
+
+    build_php_runtime_config(
+        connection,
+        runtime_home,
+        &state_dir,
+        &error_log_path,
+        version,
+        runtime_id,
+        &available_extensions,
+        None,
+    )
+}
+
+fn build_frankenphp_php_config(
+    connection: &Connection,
+    runtime_home: &Path,
+    workspace_dir: &Path,
+    php_family: &str,
+    runtime_id: Option<&str>,
+) -> Result<PathBuf, AppError> {
+    let state_dir = managed_service_state_dir(workspace_dir, &ServiceName::Frankenphp)
+        .join("php")
+        .join(php_family.replace('/', "-"));
+    let error_log_path = service_log_path(workspace_dir, &ServiceName::Frankenphp)
+        .with_file_name(format!("frankenphp-php-{php_family}.log"));
+    let overlay_ext_dir = frankenphp_overlay_ext_dir(workspace_dir, php_family);
+    let available_extensions =
+        frankenphp_available_php_extensions(runtime_home, workspace_dir, php_family);
+
+    build_php_runtime_config(
+        connection,
+        runtime_home,
+        &state_dir,
+        &error_log_path,
+        php_family,
+        runtime_id,
+        &available_extensions,
+        Some(&overlay_ext_dir),
+    )
 }
 
 pub fn resolve_php_fastcgi_runtime(
@@ -784,6 +906,7 @@ pub fn resolve_php_fastcgi_runtime(
             "-c".to_string(),
             config_path.to_string_lossy().to_string(),
         ],
+        env_vars: HashMap::new(),
         working_dir: Some(runtime_home),
         port: Some(port),
         log_path: runtime_logs_dir(workspace_dir).join(format!("php-{version}.log")),
@@ -841,6 +964,17 @@ pub fn materialize_runtime_config_file(
                 Some(runtime.id.as_str()),
             )
         }
+        RuntimeType::Frankenphp => {
+            let runtime_home = runtime_home_from_service_binary(
+                &ServiceName::Frankenphp,
+                Path::new(&runtime.path),
+            )?;
+            build_frankenphp_bootstrap_config(
+                &runtime_home,
+                workspace_dir,
+                parse_service_port(&ServiceName::Frankenphp)?.unwrap_or(80),
+            )
+        }
         RuntimeType::Mysql => {
             let runtime_home =
                 runtime_home_from_service_binary(&ServiceName::Mysql, Path::new(&runtime.path))?;
@@ -889,6 +1023,7 @@ fn service_version(service: &ServiceName) -> String {
         .unwrap_or_else(|| match service {
             ServiceName::Apache => "2.4".to_string(),
             ServiceName::Nginx => "1.25".to_string(),
+            ServiceName::Frankenphp => "1.0".to_string(),
             ServiceName::Mysql => "8.0".to_string(),
             ServiceName::Mailpit => "1.0".to_string(),
             ServiceName::Redis => "7.2".to_string(),
@@ -921,18 +1056,101 @@ fn parse_runtime_version_output(runtime_type: &RuntimeType, output: &str) -> Opt
     match runtime_type {
         RuntimeType::Apache => extract_version_after_marker(output, "Apache/"),
         RuntimeType::Nginx => extract_version_after_marker(output, "nginx/"),
+        RuntimeType::Frankenphp => extract_version_after_marker(output, "FrankenPHP ")
+            .or_else(|| extract_version_after_marker(output, "FrankenPHP v"))
+            .or_else(|| extract_version_after_marker(output, "v")),
         RuntimeType::Mysql => extract_version_after_marker(output, "Ver "),
         RuntimeType::Php => extract_version_after_marker(output, "PHP "),
     }
+}
+
+fn parse_frankenphp_embedded_php_version_output(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        extract_version_after_marker(line, " PHP ").or_else(|| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("PHP ") {
+                extract_version_after_marker(trimmed, "PHP ")
+            } else {
+                None
+            }
+        })
+    })
 }
 
 fn runtime_version_args(runtime_type: &RuntimeType) -> Vec<String> {
     match runtime_type {
         RuntimeType::Apache => vec!["-v".to_string()],
         RuntimeType::Nginx => vec!["-v".to_string()],
+        RuntimeType::Frankenphp => vec!["version".to_string()],
         RuntimeType::Mysql => vec!["--version".to_string()],
         RuntimeType::Php => vec!["-v".to_string()],
     }
+}
+
+pub fn frankenphp_embedded_php_family(binary_path: &Path) -> Result<String, AppError> {
+    if !path_exists(binary_path) {
+        return Err(AppError::new_validation(
+            "RUNTIME_BINARY_NOT_FOUND",
+            "FrankenPHP runtime binary was not found at the selected path.",
+        ));
+    }
+
+    let mut command = std::process::Command::new(binary_path);
+    command.args(["version"]);
+    configure_background_command(&mut command);
+    let output = command.output().map_err(|error| {
+        AppError::with_details(
+            "RUNTIME_VERIFY_FAILED",
+            "Could not inspect the embedded PHP version from the selected FrankenPHP binary.",
+            error.to_string(),
+        )
+    })?;
+
+    let combined_output = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let version =
+        parse_frankenphp_embedded_php_version_output(&combined_output).ok_or_else(|| {
+            AppError::with_details(
+                "RUNTIME_VERSION_PARSE_FAILED",
+                "DevNest could not detect the embedded PHP version from the selected FrankenPHP binary.",
+                combined_output.trim().to_string(),
+            )
+        })?;
+
+    Ok(runtime_version_family(&version))
+}
+
+pub fn frankenphp_managed_php_environment(
+    connection: &Connection,
+    workspace_dir: &Path,
+    binary_path: &Path,
+    runtime_id: Option<&str>,
+) -> Result<HashMap<String, String>, AppError> {
+    let runtime_home = runtime_home_from_service_binary(&ServiceName::Frankenphp, binary_path)?;
+    let embedded_php_family = frankenphp_embedded_php_family(binary_path)?;
+    let config_path = build_frankenphp_php_config(
+        connection,
+        &runtime_home,
+        workspace_dir,
+        &embedded_php_family,
+        runtime_id,
+    )?;
+    let config_dir = config_path.parent().ok_or_else(|| {
+        AppError::new_validation(
+            "PHP_CONFIG_WRITE_FAILED",
+            "Could not resolve the managed FrankenPHP PHP config directory.",
+        )
+    })?;
+    let mut env_vars = HashMap::new();
+    env_vars.insert(
+        "PHPRC".to_string(),
+        config_dir.to_string_lossy().to_string(),
+    );
+    env_vars.insert("PHP_INI_SCAN_DIR".to_string(), String::new());
+    Ok(env_vars)
 }
 
 pub fn verify_runtime_binary(
@@ -1060,7 +1278,10 @@ fn runtime_home_from_service_binary(
                 binary_dir
             }
         }
-        ServiceName::Nginx | ServiceName::Mailpit | ServiceName::Redis => binary_dir,
+        ServiceName::Nginx
+        | ServiceName::Frankenphp
+        | ServiceName::Mailpit
+        | ServiceName::Redis => binary_dir,
     };
 
     if !runtime_home.exists() || !runtime_home.is_dir() {
@@ -1437,6 +1658,43 @@ fn build_nginx_bootstrap_config(
     Ok(config_path)
 }
 
+fn build_frankenphp_bootstrap_config(
+    runtime_home: &Path,
+    workspace_dir: &Path,
+    port: u16,
+) -> Result<PathBuf, AppError> {
+    let state_dir = managed_service_state_dir(workspace_dir, &ServiceName::Frankenphp);
+    let sites_dir = managed_server_config_dir(workspace_dir, &ServerType::Frankenphp);
+    let config_path = state_dir.join("Caddyfile");
+    let import_glob = normalize_for_config(&sites_dir.join("*.conf"));
+    let runtime_home = normalize_for_config(runtime_home);
+
+    fs::create_dir_all(&state_dir).map_err(|error| {
+        AppError::with_details(
+            "SERVICE_CONFIG_WRITE_FAILED",
+            "Could not create the FrankenPHP service state directory.",
+            error.to_string(),
+        )
+    })?;
+    fs::create_dir_all(&sites_dir).map_err(|error| {
+        AppError::with_details(
+            "SERVICE_CONFIG_WRITE_FAILED",
+            "Could not create the managed FrankenPHP sites directory.",
+            error.to_string(),
+        )
+    })?;
+
+    let content = format!(
+        "{{\n    admin off\n    persist_config off\n    http_port {port}\n    https_port 443\n}}\n\nimport \"{import_glob}\"\n\nhttp://localhost:{port} {{\n    root * \"{runtime_home}\"\n    respond \"DevNest FrankenPHP runtime is ready.\" 200\n}}\n",
+        port = port,
+        import_glob = import_glob,
+        runtime_home = runtime_home,
+    );
+    write_text_file(&config_path, &content)?;
+
+    Ok(config_path)
+}
+
 fn mysql_data_dir_initialized(data_dir: &Path) -> bool {
     data_dir.join("mysql").exists()
 }
@@ -1611,6 +1869,13 @@ pub fn resolve_service_runtime(
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from);
     let runtime_home = runtime_home_from_service_binary(&service, &binary_path)?;
+    let frankenphp_runtime_id = if matches!(service, ServiceName::Frankenphp) {
+        RuntimeVersionRepository::find_active_by_type(connection, &RuntimeType::Frankenphp)?
+            .as_ref()
+            .map(|runtime| runtime.id.clone())
+    } else {
+        None
+    };
 
     let (args, working_dir) = if args.is_empty() && working_dir.is_none() {
         match service {
@@ -1658,6 +1923,21 @@ pub fn resolve_service_runtime(
                     Some(runtime_home.clone()),
                 )
             }
+            ServiceName::Frankenphp => {
+                let config_path = build_frankenphp_bootstrap_config(
+                    &runtime_home,
+                    workspace_dir,
+                    port.unwrap_or(80),
+                )?;
+                (
+                    vec![
+                        "run".to_string(),
+                        "--config".to_string(),
+                        config_path.to_string_lossy().to_string(),
+                    ],
+                    Some(runtime_home.clone()),
+                )
+            }
             ServiceName::Mysql => {
                 let config_path = build_mysql_bootstrap_config(
                     &runtime_home,
@@ -1698,12 +1978,23 @@ pub fn resolve_service_runtime(
     } else {
         (args, working_dir)
     };
+    let env_vars = if matches!(service, ServiceName::Frankenphp) {
+        frankenphp_managed_php_environment(
+            connection,
+            workspace_dir,
+            &binary_path,
+            frankenphp_runtime_id.as_deref(),
+        )?
+    } else {
+        HashMap::new()
+    };
 
     Ok(RuntimeCommand {
         port,
         log_path: service_log_path(workspace_dir, &service),
         binary_path,
         args,
+        env_vars,
         working_dir,
     })
 }
@@ -1713,7 +2004,12 @@ pub fn sync_runtime_versions(
     _workspace_dir: &Path,
     resources_dir: &Path,
 ) -> Result<(), AppError> {
-    for service in [ServiceName::Apache, ServiceName::Nginx, ServiceName::Mysql] {
+    for service in [
+        ServiceName::Apache,
+        ServiceName::Nginx,
+        ServiceName::Frankenphp,
+        ServiceName::Mysql,
+    ] {
         let Some(runtime_type) = service_runtime_type(&service) else {
             continue;
         };
@@ -1727,7 +2023,9 @@ pub fn sync_runtime_versions(
             if RuntimeSuppressionRepository::is_suppressed(connection, &runtime_type, &path)? {
                 continue;
             }
-            merge_discovered_runtime(connection, &runtime_type, &service_version(&service), &path)?;
+            let version = verify_runtime_binary(&runtime_type, &path)
+                .unwrap_or_else(|_| service_version(&service));
+            merge_discovered_runtime(connection, &runtime_type, &version, &path)?;
         }
     }
 
@@ -1787,9 +2085,10 @@ pub fn sync_runtime_versions(
 #[cfg(test)]
 mod tests {
     use super::{
+        build_frankenphp_php_config, parse_frankenphp_embedded_php_version_output,
         parse_runtime_version_output, php_extension_enabled_by_default, php_fastcgi_port,
         resolve_php_fastcgi_runtime, resolve_runtime_path_from_registry, resolve_service_runtime,
-        runtime_version_matches, sync_runtime_versions,
+        runtime_version_family, runtime_version_matches, sync_runtime_versions,
     };
     use crate::models::runtime::RuntimeType;
     use crate::models::service::ServiceName;
@@ -1842,6 +2141,15 @@ mod tests {
             "PHP 8.2.12 (cli) (built: Oct 24 2023 12:00:00)",
         );
         assert_eq!(version.as_deref(), Some("8.2.12"));
+    }
+
+    #[test]
+    fn parses_embedded_php_version_from_frankenphp_version_output() {
+        let family = parse_frankenphp_embedded_php_version_output(
+            "FrankenPHP 1.12.2 PHP 8.5.5 Caddy v2.11.2 h1:example",
+        )
+        .map(|value| runtime_version_family(&value));
+        assert_eq!(family.as_deref(), Some("8.5"));
     }
 
     #[test]
@@ -2258,6 +2566,39 @@ mod tests {
         assert_eq!(runtime.binary_path, php_cgi_binary);
         assert!(config_content.contains("extension=php_mbstring.dll"));
         assert!(config_content.contains("extension=php_pdo_mysql.dll"));
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn builds_frankenphp_php_config_with_managed_extensions() {
+        let (db_path, connection) = setup_test_db();
+        let root = make_root("devnest-frankenphp-php-config");
+        let workspace_dir = root.join("workspace");
+        let runtime_home = root.join("frankenphp");
+        let ext_dir = runtime_home.join("ext");
+
+        fs::create_dir_all(&ext_dir).expect("ext dir should exist");
+        fs::create_dir_all(&workspace_dir).expect("workspace should exist");
+        fs::write(ext_dir.join("php_mbstring.dll"), "fake").expect("fake extension should write");
+        fs::write(ext_dir.join("php_pdo_mysql.dll"), "fake").expect("fake extension should write");
+
+        let config_path =
+            build_frankenphp_php_config(&connection, &runtime_home, &workspace_dir, "8.5", None)
+                .expect("frankenphp php.ini should build");
+        let config_content = fs::read_to_string(&config_path).expect("config should exist");
+
+        assert!(config_content.contains("extension=php_mbstring.dll"));
+        assert!(config_content.contains("extension=php_pdo_mysql.dll"));
+        assert!(
+            config_path.ends_with(
+                PathBuf::from("frankenphp")
+                    .join("php")
+                    .join("8.5")
+                    .join("php.ini")
+            )
+        );
 
         fs::remove_dir_all(root).ok();
         fs::remove_file(db_path).ok();

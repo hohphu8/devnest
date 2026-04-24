@@ -98,6 +98,7 @@ fn project_service_name(project: &Project) -> ServiceName {
     match project.server_type {
         crate::models::project::ServerType::Apache => ServiceName::Apache,
         crate::models::project::ServerType::Nginx => ServiceName::Nginx,
+        crate::models::project::ServerType::Frankenphp => ServiceName::Frankenphp,
     }
 }
 

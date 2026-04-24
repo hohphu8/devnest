@@ -272,6 +272,7 @@ fn finalize_phpmyadmin_install(
     for server_type in [
         crate::models::project::ServerType::Apache,
         crate::models::project::ServerType::Nginx,
+        crate::models::project::ServerType::Frankenphp,
     ] {
         config_generator::generate_phpmyadmin_config(
             &state.workspace_dir,
@@ -283,7 +284,11 @@ fn finalize_phpmyadmin_install(
 
     apply_managed_hosts_entry(config_generator::PHPMYADMIN_DOMAIN, "127.0.0.1")?;
 
-    for service_name in [ServiceName::Apache, ServiceName::Nginx] {
+    for service_name in [
+        ServiceName::Apache,
+        ServiceName::Nginx,
+        ServiceName::Frankenphp,
+    ] {
         let service = ServiceRepository::get(connection, service_name.as_str())?;
         if matches!(
             service.status,
@@ -302,6 +307,7 @@ fn finalize_phpmyadmin_removal(connection: &Connection, state: &AppState) -> Res
     for server_type in [
         crate::models::project::ServerType::Apache,
         crate::models::project::ServerType::Nginx,
+        crate::models::project::ServerType::Frankenphp,
     ] {
         config_generator::remove_managed_config(
             &state.workspace_dir,
@@ -310,7 +316,11 @@ fn finalize_phpmyadmin_removal(connection: &Connection, state: &AppState) -> Res
         )?;
     }
 
-    for service_name in [ServiceName::Apache, ServiceName::Nginx] {
+    for service_name in [
+        ServiceName::Apache,
+        ServiceName::Nginx,
+        ServiceName::Frankenphp,
+    ] {
         let service = ServiceRepository::get(connection, service_name.as_str())?;
         if matches!(
             service.status,
@@ -489,7 +499,7 @@ pub async fn install_optional_tool_package(
                     return Err(error);
                 }
                 tool.details = Some(
-                    "phpMyAdmin is installed and mapped to https://phpmyadmin.test with HTTP fallback for Apache and Nginx."
+                    "phpMyAdmin is installed and mapped to https://phpmyadmin.test with HTTP fallback for Apache, Nginx, and FrankenPHP."
                         .to_string(),
                 );
             }

@@ -1,4 +1,4 @@
-export type RuntimeType = "php" | "apache" | "nginx" | "mysql";
+export type RuntimeType = "php" | "apache" | "nginx" | "frankenphp" | "mysql";
 export type RuntimeSource = "bundled" | "downloaded" | "imported" | "external";
 export type RuntimeHealthStatus = "available" | "missing";
 export type RuntimeArchiveKind = "zip";
@@ -15,6 +15,7 @@ export interface RuntimeInventoryItem {
   id: string;
   runtimeType: RuntimeType;
   version: string;
+  phpFamily?: string | null;
   path: string;
   isActive: boolean;
   source: RuntimeSource;
@@ -28,6 +29,7 @@ export interface RuntimePackage {
   id: string;
   runtimeType: RuntimeType;
   version: string;
+  phpFamily?: string | null;
   platform: string;
   arch: string;
   displayName: string;
@@ -66,11 +68,13 @@ export interface PhpExtensionInstallResult {
 }
 
 export type PhpExtensionPackageKind = "zip" | "binary";
+export type PhpExtensionThreadSafety = "ts" | "nts";
 
 export interface PhpExtensionPackage {
   id: string;
   extensionName: string;
   phpFamily: string;
+  threadSafety?: PhpExtensionThreadSafety | null;
   version: string;
   platform: string;
   arch: string;

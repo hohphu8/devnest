@@ -1,6 +1,6 @@
 [package]
 name = "devnest"
-version = "0.1.4"
+version = "0.1.5"
 description = "Smart local PHP workspace for Windows"
 authors = ["DevNest"]
 edition = "2024"

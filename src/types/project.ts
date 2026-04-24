@@ -1,4 +1,4 @@
-export type ServerType = "apache" | "nginx";
+export type ServerType = "apache" | "nginx" | "frankenphp";
 export type FrameworkType = "laravel" | "wordpress" | "php" | "unknown";
 export type ProjectStatus = "running" | "stopped" | "error";
 

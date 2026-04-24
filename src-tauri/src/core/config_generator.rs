@@ -152,6 +152,26 @@ fn nginx_server_name(primary_domain: &str, aliases: &[String]) -> Result<String,
     Ok(names.join(" "))
 }
 
+fn frankenphp_site_addresses(
+    scheme: &str,
+    primary_domain: &str,
+    aliases: &[String],
+) -> Result<String, AppError> {
+    let mut hosts = vec![primary_domain.to_string()];
+
+    for alias in normalized_aliases(aliases)? {
+        if !hosts.iter().any(|existing| existing == &alias) {
+            hosts.push(alias);
+        }
+    }
+
+    Ok(hosts
+        .into_iter()
+        .map(|host| format!("{scheme}://{host}"))
+        .collect::<Vec<_>>()
+        .join(", "))
+}
+
 fn render_apache(
     project: &Project,
     document_root: &str,
@@ -244,6 +264,38 @@ fn render_nginx(
     }
 }
 
+fn render_frankenphp(
+    project: &Project,
+    document_root: &str,
+    access_log: &str,
+    _error_log: &str,
+    ssl_paths: Option<&RenderedSslPaths>,
+    aliases: &[String],
+) -> Result<String, AppError> {
+    let http_addresses = frankenphp_site_addresses("http", &project.domain, aliases)?;
+
+    if let Some(ssl_paths) = ssl_paths {
+        let https_addresses = frankenphp_site_addresses("https", &project.domain, aliases)?;
+        Ok(format!(
+            "{http_addresses} {{\n    redir https://{primary_domain}{{uri}} 308\n}}\n\n{https_addresses} {{\n    root * \"{document_root}\"\n    encode zstd br gzip\n    php_server\n    file_server\n    tls \"{cert_path}\" \"{key_path}\"\n    log {{\n        output file \"{access_log}\"\n    }}\n}}\n",
+            http_addresses = http_addresses,
+            primary_domain = project.domain,
+            https_addresses = https_addresses,
+            document_root = document_root,
+            cert_path = ssl_paths.cert_path,
+            key_path = ssl_paths.key_path,
+            access_log = access_log,
+        ))
+    } else {
+        Ok(format!(
+            "{http_addresses} {{\n    root * \"{document_root}\"\n    encode zstd br gzip\n    php_server\n    file_server\n    log {{\n        output file \"{access_log}\"\n    }}\n}}\n",
+            http_addresses = http_addresses,
+            document_root = document_root,
+            access_log = access_log,
+        ))
+    }
+}
+
 fn render_ssl_paths(
     project: &Project,
     workspace_dir: &Path,
@@ -287,7 +339,12 @@ fn render_config(
     let output_path =
         managed_config_output_path(workspace_dir, &project.server_type, &project.domain);
     let logs_dir = managed_logs_dir(workspace_dir);
-    let php_port = runtime_registry::php_fastcgi_port(&project.php_version)?;
+    let php_port = match project.server_type {
+        ServerType::Apache | ServerType::Nginx => {
+            Some(runtime_registry::php_fastcgi_port(&project.php_version)?)
+        }
+        ServerType::Frankenphp => None,
+    };
     let document_root_for_config = normalize_for_config(&resolved_document_root);
     let access_log = normalize_for_config(&logs_dir.join(format!(
         "{}-{}-access.log",
@@ -307,7 +364,7 @@ fn render_config(
             &document_root_for_config,
             &access_log,
             &error_log,
-            php_port,
+            php_port.expect("apache configs always require php fastcgi"),
             ssl_paths.as_ref(),
         )?,
         ServerType::Nginx => render_nginx(
@@ -315,12 +372,21 @@ fn render_config(
             &document_root_for_config,
             &access_log,
             &error_log,
-            php_port,
+            php_port.expect("nginx configs always require php fastcgi"),
             ssl_paths.as_ref(),
+        )?,
+        ServerType::Frankenphp => render_frankenphp(
+            project,
+            &document_root_for_config,
+            &access_log,
+            &error_log,
+            ssl_paths.as_ref(),
+            aliases,
         )?,
     };
 
-    let config_text = if aliases.is_empty() {
+    let config_text = if aliases.is_empty() || matches!(project.server_type, ServerType::Frankenphp)
+    {
         config_text
     } else {
         match &project.server_type {
@@ -340,6 +406,7 @@ fn render_config(
                     if project.ssl_enabled { 2 } else { 1 },
                 )
             }
+            ServerType::Frankenphp => config_text,
         }
     };
 
@@ -624,6 +691,27 @@ mod tests {
         );
         assert!(preview.config_text.contains("<VirtualHost *:443>"));
         assert!(preview.config_text.contains("SSLEngine on"));
+
+        cleanup(&workspace, &project_root);
+    }
+
+    #[test]
+    fn previews_frankenphp_config_with_embedded_php_server() {
+        let workspace = make_workspace();
+        let project_root = make_project_root(true);
+        let mut project = sample_project(
+            &project_root,
+            ServerType::Frankenphp,
+            FrameworkType::Laravel,
+        );
+        project.ssl_enabled = true;
+
+        let preview = preview_config(&project, &workspace).expect("preview should succeed");
+
+        assert!(preview.config_text.contains("https://sample.test"));
+        assert!(preview.config_text.contains("php_server"));
+        assert!(preview.config_text.contains("file_server"));
+        assert!(preview.config_text.contains("tls "));
 
         cleanup(&workspace, &project_root);
     }

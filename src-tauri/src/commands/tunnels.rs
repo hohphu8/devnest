@@ -75,6 +75,7 @@ fn project_server_service_name(project: &Project) -> ServiceName {
     match project.server_type {
         ServerType::Apache => ServiceName::Apache,
         ServerType::Nginx => ServiceName::Nginx,
+        ServerType::Frankenphp => ServiceName::Frankenphp,
     }
 }
 

@@ -66,6 +66,7 @@ fn project_server_service_name(project: &Project) -> ServiceName {
     match project.server_type {
         ServerType::Apache => ServiceName::Apache,
         ServerType::Nginx => ServiceName::Nginx,
+        ServerType::Frankenphp => ServiceName::Frankenphp,
     }
 }
 
@@ -73,6 +74,7 @@ fn project_server_runtime_type(project: &Project) -> RuntimeType {
     match project.server_type {
         ServerType::Apache => RuntimeType::Apache,
         ServerType::Nginx => RuntimeType::Nginx,
+        ServerType::Frankenphp => RuntimeType::Frankenphp,
     }
 }
 

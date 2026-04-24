@@ -7,7 +7,7 @@ use crate::models::project::{FrameworkType, Project, ServerType};
 use crate::models::service::{ServiceName, ServiceState, ServiceStatus};
 use crate::state::AppState;
 use crate::storage::repositories::{
-    ProjectPersistentHostnameRepository, ProjectRepository, now_iso,
+    ProjectPersistentHostnameRepository, ProjectRepository, RuntimeVersionRepository, now_iso,
 };
 use crate::utils::process::configure_background_command;
 use crate::utils::windows::is_certificate_trusted_for_current_user;
@@ -40,6 +40,7 @@ fn web_service_for_project(project: &Project) -> ServiceName {
     match &project.server_type {
         ServerType::Apache => ServiceName::Apache,
         ServerType::Nginx => ServiceName::Nginx,
+        ServerType::Frankenphp => ServiceName::Frankenphp,
     }
 }
 
@@ -47,6 +48,7 @@ fn project_server_label(project: &Project) -> &'static str {
     match &project.server_type {
         ServerType::Apache => "Apache",
         ServerType::Nginx => "Nginx",
+        ServerType::Frankenphp => "FrankenPHP",
     }
 }
 
@@ -106,18 +108,51 @@ fn missing_php_extensions(
         return Ok(Vec::new());
     }
 
-    let binary = runtime_registry::resolve_php_binary(connection, &project.php_version)?;
-    let config_path = runtime_registry::build_managed_php_config(
-        connection,
-        &state.workspace_dir,
-        &project.php_version,
-    )?;
-    let mut command = Command::new(&binary);
-    command
-        .arg("-c")
-        .arg(&config_path)
-        .arg("-m")
-        .current_dir(binary.parent().unwrap_or_else(|| Path::new(&project.path)));
+    let mut command = match project.server_type {
+        ServerType::Frankenphp => {
+            let runtime = RuntimeVersionRepository::find_active_by_type(
+                connection,
+                &crate::models::runtime::RuntimeType::Frankenphp,
+            )?
+            .ok_or_else(|| {
+                AppError::new_validation(
+                    "RUNTIME_NOT_AVAILABLE",
+                    "Select an active FrankenPHP runtime before running diagnostics for FrankenPHP projects.",
+                )
+            })?;
+            let env_vars = runtime_registry::frankenphp_managed_php_environment(
+                connection,
+                &state.workspace_dir,
+                Path::new(&runtime.path),
+                Some(runtime.id.as_str()),
+            )?;
+            let mut command = Command::new(&runtime.path);
+            command
+                .arg("php-cli")
+                .arg("-r")
+                .arg("echo implode(PHP_EOL, get_loaded_extensions());");
+            for (key, value) in env_vars {
+                command.env(key, value);
+            }
+            command.current_dir(Path::new(&project.path));
+            command
+        }
+        ServerType::Apache | ServerType::Nginx => {
+            let binary = runtime_registry::resolve_php_binary(connection, &project.php_version)?;
+            let config_path = runtime_registry::build_managed_php_config(
+                connection,
+                &state.workspace_dir,
+                &project.php_version,
+            )?;
+            let mut command = Command::new(&binary);
+            command
+                .arg("-c")
+                .arg(&config_path)
+                .arg("-m")
+                .current_dir(binary.parent().unwrap_or_else(|| Path::new(&project.path)));
+            command
+        }
+    };
     configure_background_command(&mut command);
     let output = command.output().map_err(|error| {
         AppError::with_details(

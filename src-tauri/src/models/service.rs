@@ -6,6 +6,7 @@ use std::str::FromStr;
 pub enum ServiceName {
     Apache,
     Nginx,
+    Frankenphp,
     Mysql,
     Mailpit,
     Redis,
@@ -16,6 +17,7 @@ impl ServiceName {
         match self {
             Self::Apache => "apache",
             Self::Nginx => "nginx",
+            Self::Frankenphp => "frankenphp",
             Self::Mysql => "mysql",
             Self::Mailpit => "mailpit",
             Self::Redis => "redis",
@@ -26,6 +28,7 @@ impl ServiceName {
         match self {
             Self::Apache => "Apache",
             Self::Nginx => "Nginx",
+            Self::Frankenphp => "FrankenPHP",
             Self::Mysql => "MySQL",
             Self::Mailpit => "Mailpit",
             Self::Redis => "Redis",
@@ -34,7 +37,7 @@ impl ServiceName {
 
     pub fn default_port(&self) -> Option<u16> {
         match self {
-            Self::Apache | Self::Nginx => Some(80),
+            Self::Apache | Self::Nginx | Self::Frankenphp => Some(80),
             Self::Mysql => Some(3306),
             Self::Mailpit => Some(8025),
             Self::Redis => Some(6379),
@@ -49,6 +52,7 @@ impl FromStr for ServiceName {
         match value {
             "apache" => Ok(Self::Apache),
             "nginx" => Ok(Self::Nginx),
+            "frankenphp" => Ok(Self::Frankenphp),
             "mysql" => Ok(Self::Mysql),
             "mailpit" => Ok(Self::Mailpit),
             "redis" => Ok(Self::Redis),

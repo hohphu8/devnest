@@ -91,6 +91,9 @@ fn config_path_for_runtime(runtime: &RuntimeVersion, workspace_dir: &Path) -> Pa
         RuntimeType::Nginx => {
             managed_service_state_dir(workspace_dir, &ServiceName::Nginx).join("nginx.conf")
         }
+        RuntimeType::Frankenphp => {
+            managed_service_state_dir(workspace_dir, &ServiceName::Frankenphp).join("Caddyfile")
+        }
         RuntimeType::Mysql => {
             managed_service_state_dir(workspace_dir, &ServiceName::Mysql).join("my.ini")
         }
@@ -110,6 +113,17 @@ pub fn ensure_runtime_config_supported(runtime: &RuntimeVersion) -> Result<(), A
             } else {
                 Err(config_access_error(
                     "Only the active Apache or Nginx runtime exposes the managed config editor.",
+                ))
+            }
+        }
+        RuntimeType::Frankenphp => {
+            if runtime.is_active {
+                Err(config_access_error(
+                    "FrankenPHP currently exposes only the managed Caddyfile. Use Reveal Config File instead of the structured editor.",
+                ))
+            } else {
+                Err(config_access_error(
+                    "Only the active FrankenPHP runtime exposes the managed Caddyfile.",
                 ))
             }
         }
@@ -796,6 +810,7 @@ pub fn schema_for_runtime(
                 },
             ],
         ),
+        RuntimeType::Frankenphp => (false, true, vec![]),
         RuntimeType::Mysql => (false, true, vec![]),
     };
 
@@ -908,6 +923,7 @@ pub fn values_for_runtime(
                 ),
             ])
         }
+        RuntimeType::Frankenphp => BTreeMap::new(),
         RuntimeType::Mysql => BTreeMap::new(),
     };
 
@@ -1056,7 +1072,7 @@ pub fn validate_patch(
             }
             load_nginx_runtime_config_from_values(&values)?;
         }
-        RuntimeType::Mysql => unreachable!(),
+        RuntimeType::Frankenphp | RuntimeType::Mysql => unreachable!(),
     }
 
     Ok(normalized)

@@ -1,8 +1,9 @@
+use crate::core::frankenphp_octane_manager;
 use crate::core::runtime_registry;
 use crate::core::service_manager;
 use crate::error::AppError;
 use crate::models::optional_tool::OptionalToolType;
-use crate::models::project::{Project, ServerType};
+use crate::models::project::{FrankenphpMode, Project, ServerType};
 use crate::models::service::{ServiceName, ServiceStatus};
 use crate::models::tunnel::{ProjectTunnelState, TunnelProvider, TunnelStatus};
 use crate::state::{AppState, ManagedServiceProcess};
@@ -88,6 +89,9 @@ fn ensure_project_origin_service(
     let service_state = service_manager::get_service_status(connection, state, service.clone())?;
     if !matches!(service_state.status, ServiceStatus::Running) {
         let _ = service_manager::start_service(connection, state, service)?;
+    }
+    if matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+        let _ = frankenphp_octane_manager::start(connection, state, &project.id)?;
     }
 
     Ok(())

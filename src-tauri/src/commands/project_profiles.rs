@@ -26,6 +26,7 @@ struct ProjectProfileProjectSnapshot {
     ssl_enabled: bool,
     database_name: Option<String>,
     database_port: Option<i64>,
+    frankenphp_mode: Option<String>,
     env_vars: Vec<ProjectEnvVarSnapshot>,
 }
 
@@ -58,6 +59,7 @@ struct TeamProjectProfileSnapshot {
     ssl_enabled: bool,
     database_name: Option<String>,
     database_port: Option<i64>,
+    frankenphp_mode: Option<String>,
     env_vars: Vec<ProjectEnvVarSnapshot>,
 }
 
@@ -130,6 +132,21 @@ fn map_framework(value: &str) -> Result<crate::models::project::FrameworkType, A
             "Imported project profile has an invalid framework type.",
         )
     })
+}
+
+fn map_frankenphp_mode(
+    value: Option<String>,
+) -> Result<Option<crate::models::project::FrankenphpMode>, AppError> {
+    value
+        .map(|mode| {
+            mode.parse().map_err(|_| {
+                AppError::new_validation(
+                    "INVALID_PROJECT_PROFILE",
+                    "Imported project profile has an invalid FrankenPHP mode.",
+                )
+            })
+        })
+        .transpose()
 }
 
 fn read_profile_document(path: &std::path::Path) -> Result<ProjectProfileDocument, AppError> {
@@ -207,6 +224,7 @@ fn create_project_from_snapshot(
     ssl_enabled: bool,
     database_name: Option<String>,
     database_port: Option<i64>,
+    frankenphp_mode: Option<String>,
     env_vars: Vec<ProjectEnvVarSnapshot>,
 ) -> Result<Project, AppError> {
     let project = ProjectRepository::create(
@@ -222,6 +240,7 @@ fn create_project_from_snapshot(
             ssl_enabled,
             database_name,
             database_port,
+            frankenphp_mode: map_frankenphp_mode(frankenphp_mode)?,
         },
     )?;
 
@@ -275,6 +294,7 @@ pub async fn export_project_profile(
                 ssl_enabled: project.ssl_enabled,
                 database_name: project.database_name,
                 database_port: project.database_port,
+                frankenphp_mode: Some(project.frankenphp_mode.as_str().to_string()),
                 env_vars,
             },
         };
@@ -349,6 +369,7 @@ pub async fn export_team_project_profile(
                 ssl_enabled: project.ssl_enabled,
                 database_name: project.database_name,
                 database_port: project.database_port,
+                frankenphp_mode: Some(project.frankenphp_mode.as_str().to_string()),
                 env_vars,
             },
             machine_handoff: TeamProjectHandoffSnapshot {
@@ -427,6 +448,7 @@ pub async fn import_project_profile(
             project_snapshot.ssl_enabled,
             project_snapshot.database_name,
             project_snapshot.database_port,
+            project_snapshot.frankenphp_mode,
             project_snapshot.env_vars,
         )
     })
@@ -476,6 +498,7 @@ pub async fn import_team_project_profile(
             project_snapshot.ssl_enabled,
             project_snapshot.database_name,
             project_snapshot.database_port,
+            project_snapshot.frankenphp_mode,
             project_snapshot.env_vars,
         )
     })
@@ -493,7 +516,9 @@ pub async fn import_team_project_profile(
 #[cfg(test)]
 mod tests {
     use super::{project_root_name_hint, team_share_file_name_for_project};
-    use crate::models::project::{FrameworkType, Project, ProjectStatus, ServerType};
+    use crate::models::project::{
+        FrameworkType, FrankenphpMode, Project, ProjectStatus, ServerType,
+    };
 
     fn sample_project() -> Project {
         Project {
@@ -509,6 +534,7 @@ mod tests {
             database_name: Some("shop_api".to_string()),
             database_port: Some(3306),
             status: ProjectStatus::Stopped,
+            frankenphp_mode: FrankenphpMode::Classic,
             created_at: "2026-04-18T00:00:00Z".to_string(),
             updated_at: "2026-04-18T00:00:00Z".to_string(),
         }

@@ -5,7 +5,7 @@ use crate::commands::persistent_tunnels::{
 use crate::commands::tunnels::{start_project_tunnel_internal, stop_project_tunnel_internal};
 use crate::core::{config_generator, reliability, runtime_registry, service_manager};
 use crate::error::AppError;
-use crate::models::project::{FrameworkType, UpdateProjectPatch};
+use crate::models::project::{FrameworkType, FrankenphpMode, UpdateProjectPatch};
 use crate::models::reliability::{
     ActionPreflightReport, ReliabilityAction, ReliabilityInspectorSnapshot, ReliabilityLayer,
     ReliabilityTransferResult, RepairExecutionResult, RepairWorkflow, RepairWorkflowInfo,
@@ -13,6 +13,7 @@ use crate::models::reliability::{
 use crate::models::runtime::RuntimeType;
 use crate::models::service::{ServiceName, ServiceStatus};
 use crate::state::AppState;
+use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
 use crate::storage::repositories::{
     ProjectPersistentHostnameRepository, ProjectRepository, RuntimeVersionRepository, now_iso,
 };
@@ -104,6 +105,7 @@ fn repair_project_workflow(
                 database_name: None,
                 database_port: None,
                 status: None,
+                frankenphp_mode: None,
             },
         )?;
     }
@@ -112,8 +114,24 @@ fn repair_project_workflow(
     let aliases = ProjectPersistentHostnameRepository::get_by_project(connection, project_id)?
         .map(|item| vec![item.hostname])
         .unwrap_or_default();
-    let _ =
-        config_generator::generate_config_with_aliases(&refreshed, &state.workspace_dir, &aliases)?;
+    let octane_worker_port = if matches!(refreshed.frankenphp_mode, FrankenphpMode::Octane) {
+        Some(
+            FrankenphpOctaneWorkerRepository::get_or_create(
+                connection,
+                &state.workspace_dir,
+                &refreshed.id,
+            )?
+            .worker_port,
+        )
+    } else {
+        None
+    };
+    let _ = config_generator::generate_config_with_aliases_and_frankenphp_worker_port(
+        &refreshed,
+        &state.workspace_dir,
+        &aliases,
+        octane_worker_port,
+    )?;
     let _ = hosts::apply_hosts_entry(refreshed.domain.clone(), None)?;
 
     Ok(RepairExecutionResult {

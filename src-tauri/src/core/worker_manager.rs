@@ -675,6 +675,7 @@ mod tests {
                 ssl_enabled: false,
                 database_name: None,
                 database_port: None,
+                frankenphp_mode: None,
             },
         )
         .expect("project should create");

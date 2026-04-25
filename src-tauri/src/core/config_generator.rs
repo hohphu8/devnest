@@ -2,7 +2,7 @@ use crate::core::local_ssl;
 use crate::core::runtime_registry;
 use crate::error::AppError;
 use crate::models::project::ProjectStatus;
-use crate::models::project::{FrameworkType, Project, ServerType};
+use crate::models::project::{FrameworkType, FrankenphpMode, Project, ServerType};
 use crate::utils::paths::{
     managed_config_output_path, managed_logs_dir, managed_server_config_dir, normalize_for_config,
     resolve_document_root,
@@ -271,8 +271,39 @@ fn render_frankenphp(
     _error_log: &str,
     ssl_paths: Option<&RenderedSslPaths>,
     aliases: &[String],
+    octane_worker_port: Option<i64>,
 ) -> Result<String, AppError> {
     let http_addresses = frankenphp_site_addresses("http", &project.domain, aliases)?;
+
+    if matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+        let worker_port = octane_worker_port.ok_or_else(|| {
+            AppError::new_validation(
+                "FRANKENPHP_WORKER_SETTINGS_MISSING",
+                "Octane mode requires managed FrankenPHP worker settings before config generation.",
+            )
+        })?;
+
+        if let Some(ssl_paths) = ssl_paths {
+            let https_addresses = frankenphp_site_addresses("https", &project.domain, aliases)?;
+            return Ok(format!(
+                "{http_addresses} {{\n    redir https://{primary_domain}{{uri}} 308\n}}\n\n{https_addresses} {{\n    encode zstd br gzip\n    reverse_proxy 127.0.0.1:{worker_port} {{\n        header_up Host {{host}}\n        header_up X-Forwarded-Host {{host}}\n        header_up X-Forwarded-Proto https\n        header_up X-Forwarded-Port 443\n        header_up X-Forwarded-Ssl on\n    }}\n    tls \"{cert_path}\" \"{key_path}\"\n    log {{\n        output file \"{access_log}\"\n    }}\n}}\n",
+                http_addresses = http_addresses,
+                primary_domain = project.domain,
+                https_addresses = https_addresses,
+                worker_port = worker_port,
+                cert_path = ssl_paths.cert_path,
+                key_path = ssl_paths.key_path,
+                access_log = access_log,
+            ));
+        }
+
+        return Ok(format!(
+            "{http_addresses} {{\n    encode zstd br gzip\n    reverse_proxy 127.0.0.1:{worker_port} {{\n        header_up Host {{host}}\n        header_up X-Forwarded-Host {{host}}\n        header_up X-Forwarded-Proto http\n        header_up X-Forwarded-Port 80\n    }}\n    log {{\n        output file \"{access_log}\"\n    }}\n}}\n",
+            http_addresses = http_addresses,
+            worker_port = worker_port,
+            access_log = access_log,
+        ));
+    }
 
     if let Some(ssl_paths) = ssl_paths {
         let https_addresses = frankenphp_site_addresses("https", &project.domain, aliases)?;
@@ -317,11 +348,12 @@ fn render_ssl_paths(
     }))
 }
 
-pub fn preview_config(
+pub fn preview_config_with_frankenphp_worker_port(
     project: &Project,
     workspace_dir: &Path,
+    octane_worker_port: Option<i64>,
 ) -> Result<RenderedVhostConfig, AppError> {
-    render_config(project, workspace_dir, false, &[])
+    render_config(project, workspace_dir, false, &[], octane_worker_port)
 }
 
 fn render_config(
@@ -329,6 +361,7 @@ fn render_config(
     workspace_dir: &Path,
     ensure_ssl_material: bool,
     aliases: &[String],
+    octane_worker_port: Option<i64>,
 ) -> Result<RenderedVhostConfig, AppError> {
     let project_path = Path::new(&project.path);
     validate_domain(&project.domain)?;
@@ -382,6 +415,7 @@ fn render_config(
             &error_log,
             ssl_paths.as_ref(),
             aliases,
+            octane_worker_port,
         )?,
     };
 
@@ -429,7 +463,16 @@ pub fn generate_config_with_aliases(
     workspace_dir: &Path,
     aliases: &[String],
 ) -> Result<RenderedVhostConfig, AppError> {
-    let rendered = render_config(project, workspace_dir, true, aliases)?;
+    generate_config_with_aliases_and_frankenphp_worker_port(project, workspace_dir, aliases, None)
+}
+
+pub fn generate_config_with_aliases_and_frankenphp_worker_port(
+    project: &Project,
+    workspace_dir: &Path,
+    aliases: &[String],
+    octane_worker_port: Option<i64>,
+) -> Result<RenderedVhostConfig, AppError> {
+    let rendered = render_config(project, workspace_dir, true, aliases, octane_worker_port)?;
     let server_dir = managed_server_config_dir(workspace_dir, &project.server_type);
     let logs_dir = managed_logs_dir(workspace_dir);
 
@@ -477,6 +520,7 @@ pub fn generate_phpmyadmin_config(
         database_name: None,
         database_port: None,
         status: ProjectStatus::Stopped,
+        frankenphp_mode: FrankenphpMode::Classic,
         created_at: "2026-04-19T00:00:00Z".to_string(),
         updated_at: "2026-04-19T00:00:00Z".to_string(),
     };
@@ -509,9 +553,12 @@ pub fn remove_managed_config(
 mod tests {
     use super::{
         PHPMYADMIN_DOMAIN, generate_config, generate_config_with_aliases,
-        generate_phpmyadmin_config, preview_config, remove_managed_config,
+        generate_phpmyadmin_config, preview_config, preview_config_with_frankenphp_worker_port,
+        remove_managed_config,
     };
-    use crate::models::project::{FrameworkType, Project, ProjectStatus, ServerType};
+    use crate::models::project::{
+        FrameworkType, FrankenphpMode, Project, ProjectStatus, ServerType,
+    };
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -550,6 +597,7 @@ mod tests {
             database_name: None,
             database_port: None,
             status: ProjectStatus::Stopped,
+            frankenphp_mode: FrankenphpMode::Classic,
             created_at: "2026-04-17T00:00:00Z".to_string(),
             updated_at: "2026-04-17T00:00:00Z".to_string(),
         }
@@ -566,7 +614,8 @@ mod tests {
         let project_root = make_project_root(true);
         let project = sample_project(&project_root, ServerType::Nginx, FrameworkType::Laravel);
 
-        let preview = preview_config(&project, &workspace).expect("preview should succeed");
+        let preview = preview_config_with_frankenphp_worker_port(&project, &workspace, None)
+            .expect("preview should succeed");
 
         assert!(preview.config_text.contains("server_name sample.test;"));
         assert!(preview.config_text.contains("root"));
@@ -647,8 +696,8 @@ mod tests {
         let mut project = sample_project(&project_root, ServerType::Nginx, FrameworkType::Laravel);
         project.document_root = ".".to_string();
 
-        let error =
-            preview_config(&project, &workspace).expect_err("laravel root should be rejected");
+        let error = preview_config_with_frankenphp_worker_port(&project, &workspace, None)
+            .expect_err("laravel root should be rejected");
         assert_eq!(error.code, "CONFIG_INVALID_DOCUMENT_ROOT");
 
         cleanup(&workspace, &project_root);
@@ -661,7 +710,8 @@ mod tests {
         let mut project = sample_project(&project_root, ServerType::Nginx, FrameworkType::Laravel);
         project.ssl_enabled = true;
 
-        let preview = preview_config(&project, &workspace).expect("preview should succeed");
+        let preview = preview_config_with_frankenphp_worker_port(&project, &workspace, None)
+            .expect("preview should succeed");
 
         assert!(preview.config_text.contains("listen 443 ssl;"));
         assert!(
@@ -682,7 +732,8 @@ mod tests {
         let mut project = sample_project(&project_root, ServerType::Apache, FrameworkType::Laravel);
         project.ssl_enabled = true;
 
-        let preview = preview_config(&project, &workspace).expect("preview should succeed");
+        let preview = preview_config_with_frankenphp_worker_port(&project, &workspace, None)
+            .expect("preview should succeed");
 
         assert!(
             preview
@@ -706,12 +757,39 @@ mod tests {
         );
         project.ssl_enabled = true;
 
-        let preview = preview_config(&project, &workspace).expect("preview should succeed");
+        let preview = preview_config_with_frankenphp_worker_port(&project, &workspace, None)
+            .expect("preview should succeed");
 
         assert!(preview.config_text.contains("https://sample.test"));
         assert!(preview.config_text.contains("php_server"));
         assert!(preview.config_text.contains("file_server"));
         assert!(preview.config_text.contains("tls "));
+
+        cleanup(&workspace, &project_root);
+    }
+
+    #[test]
+    fn previews_frankenphp_octane_config_as_reverse_proxy() {
+        let workspace = make_workspace();
+        let project_root = make_project_root(true);
+        let mut project = sample_project(
+            &project_root,
+            ServerType::Frankenphp,
+            FrameworkType::Laravel,
+        );
+        project.frankenphp_mode = FrankenphpMode::Octane;
+
+        let preview = preview_config_with_frankenphp_worker_port(&project, &workspace, Some(8123))
+            .expect("octane preview should succeed");
+
+        assert!(preview.config_text.contains("reverse_proxy 127.0.0.1:8123"));
+        assert!(
+            preview
+                .config_text
+                .contains("header_up X-Forwarded-Proto https")
+        );
+        assert!(!preview.config_text.contains("php_server"));
+        assert!(!preview.config_text.contains("file_server"));
 
         cleanup(&workspace, &project_root);
     }

@@ -2,6 +2,7 @@ pub mod app;
 pub mod configs;
 pub mod database;
 pub mod diagnostics;
+pub mod frankenphp_octane;
 pub mod hosts;
 pub mod logs;
 pub mod mobile_preview;

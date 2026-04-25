@@ -1,11 +1,15 @@
 use crate::commands::{database, persistent_tunnels};
+use crate::core::frankenphp_octane_manager;
 use crate::core::scheduled_task_manager;
 use crate::core::worker_manager;
 use crate::core::{config_generator, project_scanner};
 use crate::error::AppError;
-use crate::models::project::{CreateProjectInput, Project, ServerType, UpdateProjectPatch};
+use crate::models::project::{
+    CreateProjectInput, FrankenphpMode, Project, ServerType, UpdateProjectPatch,
+};
 use crate::models::scan::ScanResult;
 use crate::state::AppState;
+use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
 use crate::storage::repositories::ProjectRepository;
 use crate::utils::windows::{open_folder_in_explorer, open_in_vscode, open_terminal_at_path};
 use rfd::FileDialog;
@@ -112,12 +116,34 @@ pub fn update_project(
     }
 
     let updated = ProjectRepository::update(&connection, &project_id, patch)?;
+    if matches!(current.frankenphp_mode, FrankenphpMode::Octane)
+        && !matches!(updated.frankenphp_mode, FrankenphpMode::Octane)
+    {
+        let _ = frankenphp_octane_manager::stop(&connection, &state, &project_id);
+    }
 
     remove_project_managed_configs(&state.workspace_dir, &current.domain)?;
     if updated.domain != current.domain {
         remove_project_managed_configs(&state.workspace_dir, &updated.domain)?;
     }
-    config_generator::generate_config(&updated, &state.workspace_dir)?;
+    let octane_worker_port = if matches!(updated.frankenphp_mode, FrankenphpMode::Octane) {
+        Some(
+            FrankenphpOctaneWorkerRepository::get_or_create(
+                &connection,
+                &state.workspace_dir,
+                &updated.id,
+            )?
+            .worker_port,
+        )
+    } else {
+        None
+    };
+    config_generator::generate_config_with_aliases_and_frankenphp_worker_port(
+        &updated,
+        &state.workspace_dir,
+        &[],
+        octane_worker_port,
+    )?;
     if persistent_route_context_changed {
         persistent_tunnels::reset_project_persistent_tunnel_after_profile_change(
             &connection,
@@ -149,6 +175,7 @@ pub fn delete_project(
         );
     }
     worker_manager::delete_workers_for_project(&connection, &state, &project_id)?;
+    let _ = frankenphp_octane_manager::stop(&connection, &state, &project_id);
     scheduled_task_manager::delete_tasks_for_project(&connection, &state, &project_id)?;
     ProjectRepository::delete(&connection, &project_id)?;
     remove_project_managed_configs(&state.workspace_dir, &project.domain)?;

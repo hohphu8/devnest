@@ -8,6 +8,7 @@ use crate::models::runtime::RuntimeType;
 use crate::models::service::{ServiceName, ServiceState, ServiceStatus};
 use crate::models::tunnel::TunnelStatus;
 use crate::state::{AppState, ManagedServiceProcess};
+use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
 use crate::storage::repositories::{
     OptionalToolVersionRepository, ProjectPersistentHostnameRepository, ProjectRepository,
     RuntimeVersionRepository, ServiceRepository,
@@ -341,10 +342,26 @@ pub(crate) fn sync_managed_configs_for_service(
     for project in ProjectRepository::list(connection)? {
         if project_matches_server_type(&project, &server_type) {
             let aliases = public_host_aliases_for_project(connection, state, &project.id)?;
-            config_generator::generate_config_with_aliases(
+            let octane_worker_port = if matches!(
+                project.frankenphp_mode,
+                crate::models::project::FrankenphpMode::Octane
+            ) {
+                Some(
+                    FrankenphpOctaneWorkerRepository::get_or_create(
+                        connection,
+                        &state.workspace_dir,
+                        &project.id,
+                    )?
+                    .worker_port,
+                )
+            } else {
+                None
+            };
+            config_generator::generate_config_with_aliases_and_frankenphp_worker_port(
                 &project,
                 &state.workspace_dir,
                 &aliases,
+                octane_worker_port,
             )?;
         }
     }
@@ -1204,6 +1221,7 @@ mod tests {
                 ssl_enabled: true,
                 database_name: None,
                 database_port: None,
+                frankenphp_mode: None,
             },
         )
         .expect("project should create");
@@ -1260,6 +1278,7 @@ mod tests {
                 ssl_enabled: true,
                 database_name: None,
                 database_port: None,
+                frankenphp_mode: None,
             },
         )
         .expect("project should create");

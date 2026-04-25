@@ -1,4 +1,5 @@
 pub mod diagnostics;
+pub mod frankenphp_octane;
 pub mod mobile_preview;
 pub mod optional_tool;
 pub mod persistent_tunnel;

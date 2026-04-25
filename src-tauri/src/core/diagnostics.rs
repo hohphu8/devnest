@@ -622,6 +622,7 @@ mod tests {
             ssl_enabled: false,
             database_name: Some("shop_api".to_string()),
             database_port: Some(3306),
+            frankenphp_mode: None,
         }
     }
 

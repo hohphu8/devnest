@@ -33,6 +33,7 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
           database_name TEXT,
           database_port INTEGER,
           status TEXT NOT NULL DEFAULT 'stopped' CHECK(status IN ('running', 'stopped', 'error')),
+          frankenphp_mode TEXT NOT NULL DEFAULT 'classic' CHECK(frankenphp_mode IN ('classic', 'octane')),
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
@@ -202,6 +203,23 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
           FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS project_frankenphp_octane_workers (
+          project_id TEXT PRIMARY KEY NOT NULL,
+          worker_port INTEGER NOT NULL,
+          admin_port INTEGER NOT NULL,
+          workers INTEGER NOT NULL DEFAULT 1,
+          max_requests INTEGER NOT NULL DEFAULT 500,
+          status TEXT NOT NULL DEFAULT 'stopped' CHECK(status IN ('running', 'stopped', 'error', 'starting', 'restarting')),
+          pid INTEGER,
+          last_started_at TEXT,
+          last_stopped_at TEXT,
+          last_error TEXT,
+          log_path TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path);
         CREATE INDEX IF NOT EXISTS idx_projects_domain ON projects(domain);
         CREATE INDEX IF NOT EXISTS idx_project_env_vars_project_id ON project_env_vars(project_id);
@@ -222,6 +240,7 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
         CREATE INDEX IF NOT EXISTS idx_project_scheduled_tasks_next_run_at ON project_scheduled_tasks(next_run_at);
         CREATE INDEX IF NOT EXISTS idx_project_scheduled_task_runs_task_id ON project_scheduled_task_runs(task_id);
         CREATE INDEX IF NOT EXISTS idx_project_scheduled_task_runs_project_id ON project_scheduled_task_runs(project_id);
+        CREATE INDEX IF NOT EXISTS idx_project_frankenphp_octane_workers_status ON project_frankenphp_octane_workers(status);
 
         INSERT OR IGNORE INTO schema_migrations (version, applied_at)
         VALUES ('0001_initial_schema', CURRENT_TIMESTAMP);
@@ -235,7 +254,58 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
     migrate_project_scheduled_tasks(&connection)?;
     migrate_frankenphp_runtime_support(&connection)?;
     migrate_repair_project_foreign_keys(&connection)?;
+    migrate_frankenphp_octane_workers(&connection)?;
     ServiceRepository::seed_defaults(&connection)?;
+
+    Ok(())
+}
+
+fn migrate_frankenphp_octane_workers(connection: &Connection) -> Result<(), AppError> {
+    const MIGRATION: &str = "0009_frankenphp_octane_workers";
+    if migration_applied(connection, MIGRATION)? {
+        return Ok(());
+    }
+
+    if !table_sql_contains(connection, "projects", "frankenphp_mode")? {
+        connection.execute_batch(
+            "
+            ALTER TABLE projects ADD COLUMN frankenphp_mode TEXT NOT NULL DEFAULT 'classic'
+            CHECK(frankenphp_mode IN ('classic', 'octane'));
+            ",
+        )?;
+    }
+
+    connection.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS project_frankenphp_octane_workers (
+          project_id TEXT PRIMARY KEY NOT NULL,
+          worker_port INTEGER NOT NULL,
+          admin_port INTEGER NOT NULL,
+          workers INTEGER NOT NULL DEFAULT 1,
+          max_requests INTEGER NOT NULL DEFAULT 500,
+          status TEXT NOT NULL DEFAULT 'stopped' CHECK(status IN ('running', 'stopped', 'error', 'starting', 'restarting')),
+          pid INTEGER,
+          last_started_at TEXT,
+          last_stopped_at TEXT,
+          last_error TEXT,
+          log_path TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_project_frankenphp_octane_workers_status
+        ON project_frankenphp_octane_workers(status);
+        ",
+    )?;
+
+    connection.execute(
+        "
+        INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+        VALUES (?1, CURRENT_TIMESTAMP)
+        ",
+        params![MIGRATION],
+    )?;
 
     Ok(())
 }

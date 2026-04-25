@@ -41,6 +41,11 @@ import type {
   ProjectEnvVar,
 } from "@/types/project-env-var";
 import type {
+  FrankenphpOctanePreflight,
+  FrankenphpOctaneWorkerSettings,
+  UpdateFrankenphpOctaneWorkerSettingsInput,
+} from "@/types/frankenphp-octane";
+import type {
   ActionPreflightReport,
   ReliabilityInspectorSnapshot,
   ReliabilityTransferResult,
@@ -106,6 +111,7 @@ const MOCK_PROJECT_ENV_VARS_KEY = "devnest.mock.project-env-vars";
 const MOCK_PROJECT_SCHEDULED_TASKS_KEY = "devnest.mock.project-scheduled-tasks";
 const MOCK_PROJECT_SCHEDULED_TASK_RUNS_KEY = "devnest.mock.project-scheduled-task-runs";
 const MOCK_PROJECT_WORKERS_KEY = "devnest.mock.project-workers";
+const MOCK_FRANKENPHP_OCTANE_WORKERS_KEY = "devnest.mock.frankenphp-octane-workers";
 const MOCK_RUNTIMES_KEY = "devnest.mock.runtimes";
 const MOCK_RUNTIME_PACKAGES_KEY = "devnest.mock.runtime-packages";
 const MOCK_RUNTIME_INSTALL_TASK_KEY = "devnest.mock.runtime-install-task";
@@ -137,7 +143,12 @@ function readMockProjects(): Project[] {
   }
 
   const stored = window.localStorage.getItem(MOCK_PROJECTS_KEY);
-  return stored ? (JSON.parse(stored) as Project[]) : [];
+  return stored
+    ? (JSON.parse(stored) as Project[]).map((project) => ({
+        ...project,
+        frankenphpMode: project.frankenphpMode ?? "classic",
+      }))
+    : [];
 }
 
 function writeMockProjects(projects: Project[]) {
@@ -552,6 +563,79 @@ function writeMockProjectWorkers(workers: ProjectWorker[]) {
   }
 
   window.localStorage.setItem(MOCK_PROJECT_WORKERS_KEY, JSON.stringify(workers));
+}
+
+function readMockFrankenphpOctaneWorkers(): Record<string, FrankenphpOctaneWorkerSettings> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  const stored = window.localStorage.getItem(MOCK_FRANKENPHP_OCTANE_WORKERS_KEY);
+  return stored ? (JSON.parse(stored) as Record<string, FrankenphpOctaneWorkerSettings>) : {};
+}
+
+function writeMockFrankenphpOctaneWorkers(workers: Record<string, FrankenphpOctaneWorkerSettings>) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(MOCK_FRANKENPHP_OCTANE_WORKERS_KEY, JSON.stringify(workers));
+}
+
+function mockFrankenphpOctaneLogKey(projectId: string) {
+  return `frankenphp-octane:${projectId}`;
+}
+
+function getMockFrankenphpOctaneSettings(projectId: string): FrankenphpOctaneWorkerSettings {
+  const stored = readMockFrankenphpOctaneWorkers();
+  if (stored[projectId]) {
+    return stored[projectId];
+  }
+
+  const timestamp = new Date().toISOString();
+  const usedWorkerPorts = new Set(Object.values(stored).map((worker) => worker.workerPort));
+  const usedAdminPorts = new Set(Object.values(stored).map((worker) => worker.adminPort));
+  const workerPort =
+    Array.from({ length: 100 }, (_, index) => 8100 + index).find((port) => !usedWorkerPorts.has(port)) ?? 8100;
+  const adminPort =
+    Array.from({ length: 100 }, (_, index) => 9100 + index).find((port) => !usedAdminPorts.has(port)) ?? 9100;
+  const settings: FrankenphpOctaneWorkerSettings = {
+    projectId,
+    workerPort,
+    adminPort,
+    workers: 1,
+    maxRequests: 500,
+    status: "stopped",
+    pid: null,
+    lastStartedAt: null,
+    lastStoppedAt: null,
+    lastError: null,
+    logPath: `${MOCK_APP_DATA_ROOT}/runtime-logs/frankenphp-octane/${projectId}.log`,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  stored[projectId] = settings;
+  writeMockFrankenphpOctaneWorkers(stored);
+  return settings;
+}
+
+function updateMockFrankenphpOctaneSettings(
+  projectId: string,
+  patch: Partial<FrankenphpOctaneWorkerSettings>,
+): FrankenphpOctaneWorkerSettings {
+  const stored = readMockFrankenphpOctaneWorkers();
+  const current = getMockFrankenphpOctaneSettings(projectId);
+  const cleanedPatch = Object.fromEntries(
+    Object.entries(patch).filter(([, value]) => value !== undefined),
+  ) as Partial<FrankenphpOctaneWorkerSettings>;
+  const next = {
+    ...current,
+    ...cleanedPatch,
+    updatedAt: new Date().toISOString(),
+  };
+  stored[projectId] = next;
+  writeMockFrankenphpOctaneWorkers(stored);
+  return next;
 }
 
 function defaultMockServices(): ServiceState[] {
@@ -2218,6 +2302,16 @@ function validateMockProjectInput(input: CreateProjectInput) {
       message: documentRootResult.error.issues[0]?.message ?? "Document root is invalid.",
     } satisfies AppError;
   }
+
+  if (
+    input.frankenphpMode === "octane" &&
+    (input.serverType !== "frankenphp" || input.framework !== "laravel")
+  ) {
+    throw {
+      code: "INVALID_FRANKENPHP_MODE",
+      message: "Laravel Octane Worker mode is only available for Laravel projects using FrankenPHP.",
+    } satisfies AppError;
+  }
 }
 
 function createMockRecipeProject(
@@ -2278,6 +2372,7 @@ function createMockRecipeProject(
     databaseName: null,
     databasePort: null,
     status: "stopped",
+    frankenphpMode: input.frankenphpMode ?? "classic",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -2399,6 +2494,97 @@ function mockDiagnostics(projectId: string): DiagnosticItem[] {
   return items;
 }
 
+function buildMockFrankenphpOctanePreflight(projectId: string): FrankenphpOctanePreflight {
+  const project = getMockProjectOrThrow(projectId);
+  const settings = getMockFrankenphpOctaneSettings(projectId);
+  const runtime = readMockRuntimes().find((item) => item.runtimeType === "frankenphp" && item.isActive);
+  const workerConflict = readMockServices().find(
+    (service) => service.status === "running" && service.port === settings.workerPort,
+  );
+  const adminConflict = readMockServices().find(
+    (service) => service.status === "running" && service.port === settings.adminPort,
+  );
+  const checks: FrankenphpOctanePreflight["checks"] = [
+    {
+      code: "PROJECT_FRAMEWORK",
+      level: project.framework === "laravel" ? "ok" : "error",
+      title: "Laravel project",
+      message:
+        project.framework === "laravel"
+          ? "Project framework is Laravel."
+          : "Worker mode is Laravel-only in this phase.",
+      suggestion: project.framework === "laravel" ? null : "Use Classic mode for non-Laravel projects.",
+      blocking: project.framework !== "laravel",
+    },
+    {
+      code: "SERVER_TYPE",
+      level: project.serverType === "frankenphp" ? "ok" : "error",
+      title: "FrankenPHP runtime lane",
+      message:
+        project.serverType === "frankenphp"
+          ? "Project is configured for FrankenPHP."
+          : "Octane worker mode must stay behind FrankenPHP.",
+      suggestion: project.serverType === "frankenphp" ? null : "Change the project server to FrankenPHP.",
+      blocking: project.serverType !== "frankenphp",
+    },
+    {
+      code: "OCTANE_PACKAGE",
+      level: project.name.toLowerCase().includes("octane") ? "ok" : "error",
+      title: "Laravel Octane package",
+      message: project.name.toLowerCase().includes("octane")
+        ? "`laravel/octane` is present in preview metadata."
+        : "`laravel/octane` is not installed yet.",
+      suggestion: project.name.toLowerCase().includes("octane")
+        ? null
+        : "Run the shown Composer command in the project terminal.",
+      blocking: !project.name.toLowerCase().includes("octane"),
+    },
+    {
+      code: "FRANKENPHP_RUNTIME",
+      level: runtime?.status === "available" ? "ok" : "error",
+      title: "Active FrankenPHP runtime",
+      message: runtime
+        ? `FrankenPHP ${runtime.version} is linked at ${runtime.path}.`
+        : "No active FrankenPHP runtime is linked.",
+      suggestion: runtime ? null : "Link or activate FrankenPHP in Settings before starting Octane.",
+      blocking: runtime?.status !== "available",
+    },
+    {
+      code: "WORKER_PORT",
+      level: workerConflict ? "error" : "ok",
+      title: "Worker port",
+      message: workerConflict
+        ? `Port ${settings.workerPort} is already used by ${workerConflict.name}.`
+        : `Port ${settings.workerPort} is available.`,
+      suggestion: workerConflict ? "Choose another managed worker port." : null,
+      blocking: Boolean(workerConflict),
+    },
+    {
+      code: "ADMIN_PORT",
+      level: adminConflict ? "error" : "ok",
+      title: "Admin port",
+      message: adminConflict
+        ? `Port ${settings.adminPort} is already used by ${adminConflict.name}.`
+        : `Port ${settings.adminPort} is available.`,
+      suggestion: adminConflict ? "Choose another managed admin port." : null,
+      blocking: Boolean(adminConflict),
+    },
+  ];
+  const ready = checks.every((item) => !item.blocking);
+  return {
+    projectId,
+    ready,
+    summary: ready
+      ? "Laravel Octane is ready to start behind FrankenPHP."
+      : "Fix the blocking Octane checks before starting the worker.",
+    installCommands: checks.some((item) => item.code === "OCTANE_PACKAGE" && item.blocking)
+      ? ["composer require laravel/octane"]
+      : [],
+    checks,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 function getMockProjectOrThrow(projectId: string): Project {
   const project = readMockProjects().find((item) => item.id === projectId);
 
@@ -2434,6 +2620,19 @@ function buildMockConfigPreview(project: Project) {
     tls ${sslBase}/cert.pem ${sslBase}/key.pem
 `
       : "";
+    const octaneSettings = getMockFrankenphpOctaneSettings(project.id);
+    const forwardedProto = project.sslEnabled ? "https" : "http";
+    const forwardedPort = project.sslEnabled ? "443" : "80";
+    const handlerBlock =
+      project.frankenphpMode === "octane"
+        ? `    reverse_proxy 127.0.0.1:${octaneSettings.workerPort} {
+        header_up Host {host}
+        header_up X-Forwarded-Host {host}
+        header_up X-Forwarded-Proto ${forwardedProto}
+        header_up X-Forwarded-Port ${forwardedPort}
+    }`
+        : `    php_server
+    file_server`;
 
     return {
       serverType: "frankenphp" as const,
@@ -2441,8 +2640,7 @@ function buildMockConfigPreview(project: Project) {
       configText: `${project.domain} {
     root * ${documentRoot}
     encode zstd gzip
-${tlsBlock}    php_server
-    file_server
+${tlsBlock}${handlerBlock}
 
     log {
         output file ${logsBase}-access.log
@@ -2687,6 +2885,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         databaseName: input.databaseName ?? null,
         databasePort: input.databasePort ?? null,
         status: "stopped",
+        frankenphpMode: input.frankenphpMode ?? "classic",
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -2792,6 +2991,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
           patch.databaseName === undefined ? project.databaseName ?? null : patch.databaseName,
         databasePort:
           patch.databasePort === undefined ? project.databasePort ?? null : patch.databasePort,
+        frankenphpMode: patch.frankenphpMode ?? project.frankenphpMode ?? "classic",
       });
 
       const updated: Project = {
@@ -2833,6 +3033,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
           sslEnabled: project.sslEnabled,
           databaseName: project.databaseName ?? null,
           databasePort: project.databasePort ?? null,
+          frankenphpMode: project.frankenphpMode,
           envVars,
         },
       };
@@ -2870,6 +3071,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
           sslEnabled: project.sslEnabled,
           databaseName: project.databaseName ?? null,
           databasePort: project.databasePort ?? null,
+          frankenphpMode: project.frankenphpMode,
           envVars,
         },
       };
@@ -2899,6 +3101,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         sslEnabled: boolean;
         databaseName?: string | null;
         databasePort?: number | null;
+        frankenphpMode?: Project["frankenphpMode"];
         envVars?: Array<{ envKey: string; envValue: string }>;
       };
 
@@ -2930,6 +3133,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         databaseName: projectProfile.databaseName ?? null,
         databasePort: projectProfile.databasePort ?? null,
         status: "stopped",
+        frankenphpMode: projectProfile.frankenphpMode ?? "classic",
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -2972,6 +3176,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         sslEnabled: boolean;
         databaseName?: string | null;
         databasePort?: number | null;
+        frankenphpMode?: Project["frankenphpMode"];
         envVars?: Array<{ envKey: string; envValue: string }>;
       };
       const nextPath = `${MOCK_SHARED_ROOT}/${projectProfile.rootNameHint}`;
@@ -3004,6 +3209,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         databaseName: projectProfile.databaseName ?? null,
         databasePort: projectProfile.databasePort ?? null,
         status: "stopped",
+        frankenphpMode: projectProfile.frankenphpMode ?? "classic",
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -4839,6 +5045,17 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         stopped.name,
         `[${timestamp}] INFO ${stopped.name.toUpperCase()} service stopped.`,
       );
+      if (stopped.name === "frankenphp") {
+        const workers = readMockFrankenphpOctaneWorkers();
+        writeMockFrankenphpOctaneWorkers(
+          Object.fromEntries(
+            Object.entries(workers).map(([projectId, worker]) => [
+              projectId,
+              { ...worker, status: "stopped", pid: null, lastStoppedAt: timestamp, updatedAt: timestamp },
+            ]),
+          ),
+        );
+      }
       return upsertMockService(stopped) as T;
     }
     case "restart_service": {
@@ -4880,6 +5097,118 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       logs[name] = [];
       writeMockServiceLogs(logs);
       return true as T;
+    }
+    case "get_project_frankenphp_worker_settings":
+    case "get_project_frankenphp_worker_status": {
+      const projectId = String(args?.projectId ?? "");
+      getMockProjectOrThrow(projectId);
+      return getMockFrankenphpOctaneSettings(projectId) as T;
+    }
+    case "update_project_frankenphp_worker_settings": {
+      const projectId = String(args?.projectId ?? "");
+      getMockProjectOrThrow(projectId);
+      const input = (args?.input ?? {}) as UpdateFrankenphpOctaneWorkerSettingsInput;
+      return updateMockFrankenphpOctaneSettings(projectId, {
+        workerPort: input.workerPort,
+        adminPort: input.adminPort,
+        workers: input.workers,
+        maxRequests: input.maxRequests,
+        status: "stopped",
+        pid: null,
+      }) as T;
+    }
+    case "get_project_frankenphp_octane_preflight": {
+      const projectId = String(args?.projectId ?? "");
+      return buildMockFrankenphpOctanePreflight(projectId) as T;
+    }
+    case "start_project_frankenphp_worker": {
+      const projectId = String(args?.projectId ?? "");
+      const project = getMockProjectOrThrow(projectId);
+      const preflight = buildMockFrankenphpOctanePreflight(projectId);
+      if (!preflight.ready || project.frankenphpMode !== "octane") {
+        throw {
+          code: "FRANKENPHP_WORKER_PREFLIGHT_FAILED",
+          message:
+            project.frankenphpMode !== "octane"
+              ? "Switch this FrankenPHP project to Laravel Octane Worker mode before starting the worker."
+              : preflight.summary,
+        } satisfies AppError;
+      }
+      const services = readMockServices();
+      writeMockServices(
+        services.map((service) =>
+          service.name === "frankenphp"
+            ? { ...service, status: "running", pid: 4455, updatedAt: timestamp }
+            : service,
+        ),
+      );
+      const logs = readMockServiceLogs();
+      const logKey = mockFrankenphpOctaneLogKey(projectId);
+      logs[logKey] = [
+        ...(logs[logKey] ?? []),
+        `[${timestamp}] Octane worker started on 127.0.0.1:${getMockFrankenphpOctaneSettings(projectId).workerPort}.`,
+      ];
+      writeMockServiceLogs(logs);
+      return updateMockFrankenphpOctaneSettings(projectId, {
+        status: "running",
+        pid: 8800 + Object.keys(readMockFrankenphpOctaneWorkers()).length,
+        lastStartedAt: timestamp,
+        lastError: null,
+      }) as T;
+    }
+    case "stop_project_frankenphp_worker": {
+      const projectId = String(args?.projectId ?? "");
+      getMockProjectOrThrow(projectId);
+      return updateMockFrankenphpOctaneSettings(projectId, {
+        status: "stopped",
+        pid: null,
+        lastStoppedAt: timestamp,
+      }) as T;
+    }
+    case "restart_project_frankenphp_worker": {
+      const projectId = String(args?.projectId ?? "");
+      getMockProjectOrThrow(projectId);
+      return updateMockFrankenphpOctaneSettings(projectId, {
+        status: "running",
+        pid: 8899,
+        lastStartedAt: timestamp,
+        lastError: null,
+      }) as T;
+    }
+    case "reload_project_frankenphp_worker": {
+      const projectId = String(args?.projectId ?? "");
+      const current = getMockFrankenphpOctaneSettings(projectId);
+      if (current.status !== "running") {
+        throw {
+          code: "FRANKENPHP_WORKER_NOT_RUNNING",
+          message: "Start the Laravel Octane worker before sending a reload signal.",
+        } satisfies AppError;
+      }
+      const logs = readMockServiceLogs();
+      const logKey = mockFrankenphpOctaneLogKey(projectId);
+      logs[logKey] = [...(logs[logKey] ?? []), `[${timestamp}] Octane reload requested.`];
+      writeMockServiceLogs(logs);
+      return updateMockFrankenphpOctaneSettings(projectId, { lastError: null }) as T;
+    }
+    case "read_project_frankenphp_worker_logs": {
+      const projectId = String(args?.projectId ?? "");
+      const project = getMockProjectOrThrow(projectId);
+      const lines = Number(args?.lines ?? 200);
+      const logs = readMockServiceLogs();
+      const logKey = mockFrankenphpOctaneLogKey(projectId);
+      const selected = (logs[logKey] ?? []).slice(-lines);
+      return ({
+        name: `${project.name} Octane`,
+        totalLines: logs[logKey]?.length ?? 0,
+        truncated: (logs[logKey]?.length ?? 0) > selected.length,
+        lines: selected.map((text, index) => ({
+          id: `${logKey}:${Math.max((logs[logKey]?.length ?? 0) - selected.length, 0) + index}`,
+          text,
+          severity: /error|fatal/i.test(text) ? "error" : /warn/i.test(text) ? "warning" : "info",
+          lineNumber: Math.max((logs[logKey]?.length ?? 0) - selected.length, 0) + index + 1,
+        })),
+        content: selected.join("\n"),
+      } satisfies ProjectWorkerLogPayload) as T;
     }
     case "read_project_worker_logs": {
       const workerId = String(args?.workerId ?? "");

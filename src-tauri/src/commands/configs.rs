@@ -1,7 +1,8 @@
 use crate::core::config_generator;
 use crate::error::AppError;
-use crate::models::project::ServerType;
+use crate::models::project::{FrankenphpMode, ServerType};
 use crate::state::AppState;
+use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
 use crate::storage::repositories::ProjectRepository;
 use rusqlite::Connection;
 
@@ -31,7 +32,23 @@ pub fn preview_vhost_config(
 ) -> Result<PreviewVhostConfigResult, AppError> {
     let connection = connection_from_state(&state)?;
     let project = ProjectRepository::get(&connection, &project_id)?;
-    let rendered = config_generator::preview_config(&project, &state.workspace_dir)?;
+    let octane_worker_port = if matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+        Some(
+            FrankenphpOctaneWorkerRepository::get_or_create(
+                &connection,
+                &state.workspace_dir,
+                &project.id,
+            )?
+            .worker_port,
+        )
+    } else {
+        None
+    };
+    let rendered = config_generator::preview_config_with_frankenphp_worker_port(
+        &project,
+        &state.workspace_dir,
+        octane_worker_port,
+    )?;
 
     Ok(PreviewVhostConfigResult {
         server_type: rendered.server_type,
@@ -47,7 +64,24 @@ pub fn generate_vhost_config(
 ) -> Result<GenerateVhostConfigResult, AppError> {
     let connection = connection_from_state(&state)?;
     let project = ProjectRepository::get(&connection, &project_id)?;
-    let rendered = config_generator::generate_config(&project, &state.workspace_dir)?;
+    let octane_worker_port = if matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+        Some(
+            FrankenphpOctaneWorkerRepository::get_or_create(
+                &connection,
+                &state.workspace_dir,
+                &project.id,
+            )?
+            .worker_port,
+        )
+    } else {
+        None
+    };
+    let rendered = config_generator::generate_config_with_aliases_and_frankenphp_worker_port(
+        &project,
+        &state.workspace_dir,
+        &[],
+        octane_worker_port,
+    )?;
 
     Ok(GenerateVhostConfigResult {
         success: true,

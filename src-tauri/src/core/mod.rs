@@ -1,6 +1,7 @@
 pub mod config_generator;
 pub mod database_time_machine;
 pub mod diagnostics;
+pub mod frankenphp_octane_manager;
 pub mod hosts_editor;
 pub mod local_ssl;
 pub mod log_reader;

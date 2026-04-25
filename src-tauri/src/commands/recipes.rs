@@ -371,6 +371,7 @@ fn create_project_from_recipe(
             ssl_enabled,
             database_name: None,
             database_port: None,
+            frankenphp_mode: None,
         },
     )
 }

@@ -18,6 +18,13 @@ use crate::commands::database::{
     run_scheduled_database_snapshot_cycle, take_database_snapshot,
 };
 use crate::commands::diagnostics::{apply_diagnostic_fix, run_diagnostics};
+use crate::commands::frankenphp_octane::{
+    get_project_frankenphp_octane_preflight, get_project_frankenphp_worker_settings,
+    get_project_frankenphp_worker_status, read_project_frankenphp_worker_logs,
+    reload_project_frankenphp_worker, restart_project_frankenphp_worker,
+    start_project_frankenphp_worker, stop_project_frankenphp_worker,
+    update_project_frankenphp_worker_settings,
+};
 use crate::commands::hosts::{apply_hosts_entry, remove_hosts_entry};
 use crate::commands::logs::{clear_service_logs, read_service_logs};
 use crate::commands::mobile_preview::{
@@ -98,7 +105,8 @@ use crate::commands::tunnels::{
 };
 use crate::commands::workspace::get_workspace_overview;
 use crate::core::{
-    php_cli_environment, runtime_registry, scheduled_task_manager, service_manager, worker_manager,
+    frankenphp_octane_manager, php_cli_environment, runtime_registry, scheduled_task_manager,
+    service_manager, worker_manager,
 };
 use crate::error::AppError;
 use crate::models::project::ServerType;
@@ -176,6 +184,10 @@ fn auto_start_boot_services(connection: &Connection, state: &AppState) {
 
 fn auto_start_boot_workers(connection: &Connection, state: &AppState) {
     worker_manager::auto_start_project_workers(connection, state);
+}
+
+fn auto_start_boot_octane_workers(connection: &Connection, state: &AppState) {
+    frankenphp_octane_manager::auto_start_previous_octane_workers(connection, state);
 }
 
 fn auto_resume_boot_scheduled_tasks(connection: &Connection) {
@@ -278,6 +290,7 @@ pub fn run() {
 
             auto_start_boot_services(&connection, &state);
             auto_start_boot_workers(&connection, &state);
+            auto_start_boot_octane_workers(&connection, &state);
             auto_resume_boot_scheduled_tasks(&connection);
             let scheduled_task_db_path = state.db_path.clone();
             let scheduled_task_workspace_dir = state.workspace_dir.clone();
@@ -399,6 +412,15 @@ pub fn run() {
             check_port,
             run_diagnostics,
             apply_diagnostic_fix,
+            get_project_frankenphp_worker_settings,
+            update_project_frankenphp_worker_settings,
+            get_project_frankenphp_octane_preflight,
+            get_project_frankenphp_worker_status,
+            start_project_frankenphp_worker,
+            stop_project_frankenphp_worker,
+            restart_project_frankenphp_worker,
+            reload_project_frankenphp_worker,
+            read_project_frankenphp_worker_logs,
             list_databases,
             create_database,
             drop_database,

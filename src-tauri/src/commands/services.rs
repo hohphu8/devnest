@@ -1,5 +1,5 @@
 use crate::commands::persistent_tunnels;
-use crate::core::service_manager;
+use crate::core::{frankenphp_octane_manager, service_manager};
 use crate::error::AppError;
 use crate::models::service::ServiceName;
 use crate::models::service::ServiceState;
@@ -49,6 +49,9 @@ pub fn stop_service(
     let service = ServiceRepository::get(&connection, &name)?;
     let service_name = service.name;
     let stopped = service_manager::stop_service(&connection, &state, service_name.clone())?;
+    if matches!(service_name, ServiceName::Frankenphp) {
+        frankenphp_octane_manager::mark_stale_for_frankenphp_stop(&connection, &state)?;
+    }
     persistent_tunnels::reset_persistent_tunnels_for_origin_service_stop(
         &connection,
         &state,

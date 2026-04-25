@@ -5,7 +5,8 @@ use crate::models::persistent_tunnel::{
     PersistentTunnelManagedSetup, PersistentTunnelProvider, ProjectPersistentHostname,
 };
 use crate::models::project::{
-    CreateProjectInput, FrameworkType, Project, ProjectStatus, ServerType, UpdateProjectPatch,
+    CreateProjectInput, FrameworkType, FrankenphpMode, Project, ProjectStatus, ServerType,
+    UpdateProjectPatch,
 };
 use crate::models::project_env_var::{
     CreateProjectEnvVarInput, ProjectEnvVar, UpdateProjectEnvVarInput,
@@ -52,6 +53,15 @@ fn parse_project_status(value: &str) -> Result<ProjectStatus, AppError> {
         AppError::new_validation(
             "INVALID_PROJECT_STATUS",
             "Stored project status is invalid.",
+        )
+    })
+}
+
+fn parse_frankenphp_mode(value: &str) -> Result<FrankenphpMode, AppError> {
+    value.parse().map_err(|_| {
+        AppError::new_validation(
+            "INVALID_FRANKENPHP_MODE",
+            "Stored FrankenPHP mode is invalid.",
         )
     })
 }
@@ -109,6 +119,10 @@ fn map_project_row(row: &Row<'_>) -> Result<Project, AppError> {
         database_name: row.get("database_name")?,
         database_port: row.get("database_port")?,
         status: parse_project_status(&row.get::<_, String>("status")?)?,
+        frankenphp_mode: parse_frankenphp_mode(
+            &row.get::<_, Option<String>>("frankenphp_mode")?
+                .unwrap_or_else(|| "classic".to_string()),
+        )?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -388,6 +402,24 @@ fn validate_database_port(value: Option<i64>) -> Result<Option<i64>, AppError> {
     }
 }
 
+fn validate_frankenphp_mode(
+    server_type: &ServerType,
+    framework: &FrameworkType,
+    mode: FrankenphpMode,
+) -> Result<FrankenphpMode, AppError> {
+    if matches!(mode, FrankenphpMode::Octane)
+        && (!matches!(server_type, ServerType::Frankenphp)
+            || !matches!(framework, FrameworkType::Laravel))
+    {
+        return Err(AppError::new_validation(
+            "INVALID_FRANKENPHP_MODE",
+            "Laravel Octane Worker mode is only available for Laravel projects using FrankenPHP.",
+        ));
+    }
+
+    Ok(mode)
+}
+
 fn validate_env_key(value: &str) -> Result<String, AppError> {
     let trimmed = value.trim().to_ascii_uppercase();
 
@@ -489,6 +521,11 @@ impl ProjectRepository {
         let document_root = validate_document_root(Path::new(&path), &input.document_root)?;
         let database_name = normalize_database_name(input.database_name);
         let database_port = validate_database_port(input.database_port)?;
+        let frankenphp_mode = validate_frankenphp_mode(
+            &input.server_type,
+            &input.framework,
+            input.frankenphp_mode.unwrap_or(FrankenphpMode::Classic),
+        )?;
         let timestamp = now_iso()?;
         let project_id = Uuid::new_v4().to_string();
 
@@ -497,9 +534,9 @@ impl ProjectRepository {
                 "
                 INSERT INTO projects (
                     id, name, path, domain, server_type, php_version, framework, document_root,
-                    ssl_enabled, database_name, database_port, status, created_at, updated_at
+                    ssl_enabled, database_name, database_port, status, frankenphp_mode, created_at, updated_at
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'stopped', ?12, ?12)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'stopped', ?12, ?13, ?13)
                 ",
                 params![
                     project_id,
@@ -513,6 +550,7 @@ impl ProjectRepository {
                     if input.ssl_enabled { 1 } else { 0 },
                     database_name,
                     database_port,
+                    frankenphp_mode.as_str(),
                     timestamp,
                 ],
             )
@@ -532,28 +570,45 @@ impl ProjectRepository {
 
         let name = match patch.name {
             Some(value) => validate_name(&value)?,
-            None => current.name,
+            None => current.name.clone(),
         };
         let domain = match patch.domain {
             Some(value) => validate_domain(&value)?,
-            None => current.domain,
+            None => current.domain.clone(),
         };
         let php_version = match patch.php_version {
             Some(value) => validate_php_version(&value)?,
-            None => current.php_version,
+            None => current.php_version.clone(),
         };
         let document_root = match patch.document_root {
             Some(value) => validate_document_root(Path::new(&project_path), &value)?,
-            None => current.document_root,
+            None => current.document_root.clone(),
         };
         let database_name = match patch.database_name {
             Some(value) => normalize_database_name(value),
-            None => current.database_name,
+            None => current.database_name.clone(),
         };
         let database_port = match patch.database_port {
             Some(value) => validate_database_port(value)?,
             None => current.database_port,
         };
+        let server_type = patch
+            .server_type
+            .unwrap_or_else(|| current.server_type.clone());
+        let framework = patch.framework.unwrap_or_else(|| current.framework.clone());
+        let frankenphp_mode = validate_frankenphp_mode(
+            &server_type,
+            &framework,
+            patch.frankenphp_mode.unwrap_or_else(|| {
+                if matches!(server_type, ServerType::Frankenphp)
+                    && matches!(framework, FrameworkType::Laravel)
+                {
+                    current.frankenphp_mode.clone()
+                } else {
+                    FrankenphpMode::Classic
+                }
+            }),
+        )?;
 
         connection
             .execute(
@@ -570,16 +625,17 @@ impl ProjectRepository {
                     database_name = ?9,
                     database_port = ?10,
                     status = ?11,
-                    updated_at = ?12
+                    frankenphp_mode = ?12,
+                    updated_at = ?13
                 WHERE id = ?1
                 ",
                 params![
                     project_id,
                     name,
                     domain,
-                    patch.server_type.unwrap_or(current.server_type).as_str(),
+                    server_type.as_str(),
                     php_version,
-                    patch.framework.unwrap_or(current.framework).as_str(),
+                    framework.as_str(),
                     document_root,
                     if patch.ssl_enabled.unwrap_or(current.ssl_enabled) {
                         1
@@ -588,7 +644,11 @@ impl ProjectRepository {
                     },
                     database_name,
                     database_port,
-                    patch.status.unwrap_or(current.status).as_str(),
+                    patch
+                        .status
+                        .unwrap_or_else(|| current.status.clone())
+                        .as_str(),
+                    frankenphp_mode.as_str(),
                     timestamp,
                 ],
             )
@@ -1849,6 +1909,7 @@ mod tests {
             ssl_enabled: false,
             database_name: Some("shop_api".to_string()),
             database_port: Some(3306),
+            frankenphp_mode: None,
         }
     }
 
@@ -2048,6 +2109,7 @@ mod tests {
                 database_name: None,
                 database_port: None,
                 status: None,
+                frankenphp_mode: None,
             },
         )
         .expect("project update should succeed");

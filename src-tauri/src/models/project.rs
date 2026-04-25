@@ -97,6 +97,34 @@ impl FromStr for ProjectStatus {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FrankenphpMode {
+    Classic,
+    Octane,
+}
+
+impl FrankenphpMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Octane => "octane",
+        }
+    }
+}
+
+impl FromStr for FrankenphpMode {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "classic" => Ok(Self::Classic),
+            "octane" => Ok(Self::Octane),
+            _ => Err("Invalid FrankenPHP mode"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -112,6 +140,7 @@ pub struct Project {
     pub database_name: Option<String>,
     pub database_port: Option<i64>,
     pub status: ProjectStatus,
+    pub frankenphp_mode: FrankenphpMode,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -129,6 +158,7 @@ pub struct CreateProjectInput {
     pub ssl_enabled: bool,
     pub database_name: Option<String>,
     pub database_port: Option<i64>,
+    pub frankenphp_mode: Option<FrankenphpMode>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -144,4 +174,5 @@ pub struct UpdateProjectPatch {
     pub database_name: Option<Option<String>>,
     pub database_port: Option<Option<i64>>,
     pub status: Option<ProjectStatus>,
+    pub frankenphp_mode: Option<FrankenphpMode>,
 }

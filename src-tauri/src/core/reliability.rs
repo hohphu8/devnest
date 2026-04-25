@@ -1,6 +1,6 @@
 use crate::core::{config_generator, diagnostics, persistent_tunnels, ports, service_manager};
 use crate::error::AppError;
-use crate::models::project::{Project, ServerType};
+use crate::models::project::{FrankenphpMode, Project, ServerType};
 use crate::models::reliability::{
     ActionPreflightReport, InspectorConfigSnapshot, InspectorRuntimeBinding,
     InspectorRuntimeSnapshot, ReliabilityAction, ReliabilityCheck, ReliabilityInspectorSnapshot,
@@ -11,6 +11,7 @@ use crate::models::runtime::RuntimeType;
 use crate::models::service::{ServiceName, ServiceStatus};
 use crate::models::tunnel::ProjectTunnelState;
 use crate::state::AppState;
+use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
 use crate::storage::repositories::{
     ProjectPersistentHostnameRepository, ProjectRepository, RuntimeVersionRepository, now_iso,
 };
@@ -76,6 +77,25 @@ fn project_server_runtime_type(project: &Project) -> RuntimeType {
         ServerType::Nginx => RuntimeType::Nginx,
         ServerType::Frankenphp => RuntimeType::Frankenphp,
     }
+}
+
+fn octane_worker_port_for_config(
+    connection: &Connection,
+    state: &AppState,
+    project: &Project,
+) -> Result<Option<i64>, AppError> {
+    if !matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+        return Ok(None);
+    }
+
+    Ok(Some(
+        FrankenphpOctaneWorkerRepository::get_or_create(
+            connection,
+            &state.workspace_dir,
+            &project.id,
+        )?
+        .worker_port,
+    ))
 }
 
 fn push_check(
@@ -434,7 +454,12 @@ pub fn run_preflight(
                 )
             })?;
             let project = ProjectRepository::get(connection, project_id)?;
-            let preview = config_generator::preview_config(&project, &state.workspace_dir);
+            let octane_worker_port = octane_worker_port_for_config(connection, state, &project)?;
+            let preview = config_generator::preview_config_with_frankenphp_worker_port(
+                &project,
+                &state.workspace_dir,
+                octane_worker_port,
+            );
             match preview {
                 Ok(rendered) => push_check(
                     &mut checks,
@@ -720,7 +745,12 @@ pub fn inspect_project_state(
     let project = ProjectRepository::get(connection, project_id)?;
     let diagnostics = diagnostics::run_diagnostics(connection, state, project_id)?;
     let services = service_manager::get_all_service_status(connection, state)?;
-    let preview = config_generator::preview_config(&project, &state.workspace_dir);
+    let octane_worker_port = octane_worker_port_for_config(connection, state, &project)?;
+    let preview = config_generator::preview_config_with_frankenphp_worker_port(
+        &project,
+        &state.workspace_dir,
+        octane_worker_port,
+    );
     let persistent_hostname =
         ProjectPersistentHostnameRepository::get_by_project(connection, project_id)?;
     let persistent_tunnel = {
@@ -1107,6 +1137,7 @@ mod tests {
                 ssl_enabled: false,
                 database_name: None,
                 database_port: None,
+                frankenphp_mode: None,
             },
         )
         .expect("project should create");
@@ -1154,6 +1185,7 @@ mod tests {
                 ssl_enabled: false,
                 database_name: Some("inspector_db".to_string()),
                 database_port: Some(3306),
+                frankenphp_mode: None,
             },
         )
         .expect("project should create");

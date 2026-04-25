@@ -1,6 +1,7 @@
 export type ServerType = "apache" | "nginx" | "frankenphp";
 export type FrameworkType = "laravel" | "wordpress" | "php" | "unknown";
 export type ProjectStatus = "running" | "stopped" | "error";
+export type FrankenphpMode = "classic" | "octane";
 
 export interface Project {
   id: string;
@@ -15,6 +16,7 @@ export interface Project {
   databaseName?: string | null;
   databasePort?: number | null;
   status: ProjectStatus;
+  frankenphpMode: FrankenphpMode;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,6 +32,7 @@ export interface CreateProjectInput {
   sslEnabled: boolean;
   databaseName?: string | null;
   databasePort?: number | null;
+  frankenphpMode?: FrankenphpMode | null;
 }
 
 export interface UpdateProjectPatch {
@@ -43,6 +46,7 @@ export interface UpdateProjectPatch {
   databaseName?: string | null;
   databasePort?: number | null;
   status?: ProjectStatus;
+  frankenphpMode?: FrankenphpMode;
 }
 
 export interface ScanResult {

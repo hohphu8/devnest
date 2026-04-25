@@ -54,6 +54,7 @@ pub fn apply_diagnostic_fix(
                     database_name: None,
                     database_port: None,
                     status: None,
+                    frankenphp_mode: None,
                 },
             )?;
 

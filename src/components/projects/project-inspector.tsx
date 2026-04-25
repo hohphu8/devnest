@@ -13,6 +13,7 @@ import { projectProfileApi } from "@/lib/api/project-profile-api";
 import { reliabilityApi } from "@/lib/api/reliability-api";
 import { projectEnvApi } from "@/lib/api/project-env-api";
 import { projectApi } from "@/lib/api/project-api";
+import { frankenphpOctaneApi } from "@/lib/api/frankenphp-octane-api";
 import { runtimeApi } from "@/lib/api/runtime-api";
 import { summarizeDiagnostics, getLiveProjectStatus, getStatusTone } from "@/lib/project-health";
 import { formatServiceLogPreview } from "@/lib/service-logs";
@@ -35,6 +36,10 @@ import type {
 import type { ProjectMobilePreviewState } from "@/types/mobile-preview";
 import type { Project, UpdateProjectPatch } from "@/types/project";
 import type { RuntimeInventoryItem } from "@/types/runtime";
+import type {
+  FrankenphpOctanePreflight,
+  FrankenphpOctaneWorkerSettings,
+} from "@/types/frankenphp-octane";
 import { mobilePreviewApi } from "@/lib/api/mobile-preview-api";
 
 interface ProjectInspectorProps {
@@ -154,6 +159,18 @@ export function ProjectInspector({
   const [refreshingEnvInspection, setRefreshingEnvInspection] = useState(false);
   const [copyingEnvReviewKeys, setCopyingEnvReviewKeys] = useState<false | "all" | "missingInEnv">(false);
   const [runtimeInventory, setRuntimeInventory] = useState<RuntimeInventoryItem[]>([]);
+  const [octaneSettings, setOctaneSettings] = useState<FrankenphpOctaneWorkerSettings | null>(null);
+  const [octanePreflight, setOctanePreflight] = useState<FrankenphpOctanePreflight | null>(null);
+  const [octaneLogs, setOctaneLogs] = useState("");
+  const [octaneError, setOctaneError] = useState<string>();
+  const [octaneLoading, setOctaneLoading] = useState(false);
+  const [octaneAction, setOctaneAction] = useState<"start" | "stop" | "restart" | "reload" | "save" | "refresh" | null>(null);
+  const [octaneDraft, setOctaneDraft] = useState({
+    workerPort: 8100,
+    adminPort: 9100,
+    workers: 1,
+    maxRequests: 500,
+  });
   const diagnosticsByProject = useDiagnosticsStore((state) => state.itemsByProject);
   const diagnosticsError = useDiagnosticsStore((state) => state.error);
   const lastRunAtByProject = useDiagnosticsStore((state) => state.lastRunAtByProject);
@@ -161,6 +178,7 @@ export function ProjectInspector({
   const runDiagnostics = useDiagnosticsStore((state) => state.runDiagnostics);
   const {
     actionName,
+    fetchService,
     services,
     startService,
     stopService,
@@ -191,6 +209,12 @@ export function ProjectInspector({
       setDeletingEnvVarId(undefined);
       setRefreshingEnvInspection(false);
       setCopyingEnvReviewKeys(false);
+      setOctaneSettings(null);
+      setOctanePreflight(null);
+      setOctaneLogs("");
+      setOctaneError(undefined);
+      setOctaneLoading(false);
+      setOctaneAction(null);
       return;
     }
 
@@ -205,6 +229,7 @@ export function ProjectInspector({
       databaseName: project.databaseName ?? null,
       databasePort: project.databasePort ?? null,
       status: project.status,
+      frankenphpMode: project.frankenphpMode ?? "classic",
     });
     setMessage(undefined);
   }, [project]);
@@ -352,6 +377,63 @@ export function ProjectInspector({
   }, [actionName, activeTab, project]);
 
   useEffect(() => {
+    if (!project || project.serverType !== "frankenphp" || activeTab !== "runtime") {
+      setOctaneSettings(null);
+      setOctanePreflight(null);
+      setOctaneLogs("");
+      setOctaneError(undefined);
+      setOctaneLoading(false);
+      setOctaneAction(null);
+      return;
+    }
+
+    let cancelled = false;
+    setOctaneLoading(true);
+    setOctaneError(undefined);
+
+    Promise.allSettled([
+      frankenphpOctaneApi.getSettings(project.id),
+      frankenphpOctaneApi.preflight(project.id),
+      frankenphpOctaneApi.readLogs(project.id, 80),
+    ])
+      .then(([settingsResult, preflightResult, logsResult]) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (settingsResult.status === "fulfilled") {
+          setOctaneSettings(settingsResult.value);
+          setOctaneDraft({
+            workerPort: settingsResult.value.workerPort,
+            adminPort: settingsResult.value.adminPort,
+            workers: settingsResult.value.workers,
+            maxRequests: settingsResult.value.maxRequests,
+          });
+        } else {
+          setOctaneSettings(null);
+          setOctaneError(getAppErrorMessage(settingsResult.reason, "Could not load Octane settings."));
+        }
+
+        if (preflightResult.status === "fulfilled") {
+          setOctanePreflight(preflightResult.value);
+        }
+
+        if (logsResult.status === "fulfilled") {
+          setOctaneLogs(logsResult.value.content ?? "");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setOctaneLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, actionName, project]);
+
+  useEffect(() => {
     if (!project || activeTab !== "envVars") {
       setEnvVars([]);
       setEnvVarsError(undefined);
@@ -432,6 +514,8 @@ export function ProjectInspector({
 
   const currentProject = project;
   const draftServerType = draft.serverType ?? currentProject.serverType;
+  const draftFramework = draft.framework ?? currentProject.framework;
+  const draftFrankenphpMode = draft.frankenphpMode ?? currentProject.frankenphpMode ?? "classic";
   const draftPhpVersion = draft.phpVersion ?? currentProject.phpVersion;
   const diagnostics = diagnosticsByProject[currentProject.id] ?? [];
   const diagnosticsSummary = summarizeDiagnostics(diagnostics);
@@ -645,6 +729,14 @@ export function ProjectInspector({
       return;
     }
 
+    const nextServerType = draft.serverType ?? currentProject.serverType;
+    const nextFramework = draft.framework ?? currentProject.framework;
+    const nextFrankenphpMode = draft.frankenphpMode ?? currentProject.frankenphpMode ?? "classic";
+    if (nextFrankenphpMode === "octane" && (nextServerType !== "frankenphp" || nextFramework !== "laravel")) {
+      setMessage("Laravel Octane Worker mode is only available for Laravel projects using FrankenPHP.");
+      return;
+    }
+
     try {
       await onUpdate(currentProject.id, draft);
       setMessage(undefined);
@@ -685,8 +777,13 @@ export function ProjectInspector({
 
   async function handleRuntimeToggle() {
     try {
+      const isOctaneRuntime =
+        currentProject.serverType === "frankenphp" && currentProject.frankenphpMode === "octane";
       if (runtimeRunning) {
         await stopService(currentProject.serverType);
+        if (isOctaneRuntime) {
+          void refreshOctane();
+        }
         setMessage(undefined);
         pushToast({
           tone: "success",
@@ -709,7 +806,14 @@ export function ProjectInspector({
           return;
         }
 
-        await startService(currentProject.serverType);
+        if (isOctaneRuntime) {
+          const settings = await frankenphpOctaneApi.start(currentProject.id);
+          setOctaneSettings(settings);
+          await fetchService("frankenphp");
+          void refreshOctane();
+        } else {
+          await startService(currentProject.serverType);
+        }
         setMessage(undefined);
         pushToast({
           tone: "success",
@@ -725,6 +829,92 @@ export function ProjectInspector({
         title: "Runtime action failed",
         message: nextMessage,
       });
+    }
+  }
+
+  async function refreshOctane() {
+    if (!currentProject || currentProject.serverType !== "frankenphp") {
+      return;
+    }
+
+    setOctaneAction("refresh");
+    setOctaneError(undefined);
+    try {
+      const [settings, preflight, logs] = await Promise.all([
+        frankenphpOctaneApi.status(currentProject.id),
+        frankenphpOctaneApi.preflight(currentProject.id),
+        frankenphpOctaneApi.readLogs(currentProject.id, 80),
+      ]);
+      setOctaneSettings(settings);
+      setOctanePreflight(preflight);
+      setOctaneLogs(logs.content ?? "");
+      setOctaneDraft({
+        workerPort: settings.workerPort,
+        adminPort: settings.adminPort,
+        workers: settings.workers,
+        maxRequests: settings.maxRequests,
+      });
+    } catch (error) {
+      setOctaneError(getAppErrorMessage(error, "Could not refresh Octane worker state."));
+    } finally {
+      setOctaneAction(null);
+    }
+  }
+
+  async function handleOctaneSettingsSave() {
+    setOctaneAction("save");
+    setOctaneError(undefined);
+    try {
+      const settings = await frankenphpOctaneApi.updateSettings(currentProject.id, octaneDraft);
+      setOctaneSettings(settings);
+      setOctaneDraft({
+        workerPort: settings.workerPort,
+        adminPort: settings.adminPort,
+        workers: settings.workers,
+        maxRequests: settings.maxRequests,
+      });
+      setOctanePreflight(await frankenphpOctaneApi.preflight(currentProject.id));
+      pushToast({
+        tone: "success",
+        title: "Octane settings saved",
+        message: "Worker ports and request limits were updated.",
+      });
+    } catch (error) {
+      const message = getAppErrorMessage(error, "Could not save Octane worker settings.");
+      setOctaneError(message);
+      pushToast({ tone: "error", title: "Octane settings failed", message });
+    } finally {
+      setOctaneAction(null);
+    }
+  }
+
+  async function handleOctaneAction(action: "start" | "stop" | "restart" | "reload") {
+    setOctaneAction(action);
+    setOctaneError(undefined);
+    try {
+      const settings =
+        action === "start"
+          ? await frankenphpOctaneApi.start(currentProject.id)
+          : action === "stop"
+            ? await frankenphpOctaneApi.stop(currentProject.id)
+            : action === "restart"
+              ? await frankenphpOctaneApi.restart(currentProject.id)
+              : await frankenphpOctaneApi.reload(currentProject.id);
+      setOctaneSettings(settings);
+      const logs = await frankenphpOctaneApi.readLogs(currentProject.id, 80);
+      setOctaneLogs(logs.content ?? "");
+      setOctanePreflight(await frankenphpOctaneApi.preflight(currentProject.id));
+      pushToast({
+        tone: action === "stop" ? "info" : "success",
+        title: `Octane ${action}`,
+        message: `Laravel Octane worker ${action === "reload" ? "reload signal sent" : `${action}ed`}.`,
+      });
+    } catch (error) {
+      const message = getAppErrorMessage(error, `Could not ${action} the Octane worker.`);
+      setOctaneError(message);
+      pushToast({ tone: "error", title: `Octane ${action} failed`, message });
+    } finally {
+      setOctaneAction(null);
     }
   }
 
@@ -1220,6 +1410,176 @@ export function ProjectInspector({
             </div>
           </Card>
 
+          {currentProject.serverType === "frankenphp" ? (
+            <Card>
+              <div className="page-header">
+                <div>
+                  <h2>FrankenPHP Mode</h2>
+                  <p>Classic keeps the embedded PHP server path. Laravel Octane runs a per-project worker behind the same local domain.</p>
+                </div>
+                <span className="status-chip" data-tone={currentProject.frankenphpMode === "octane" ? "success" : "warning"}>
+                  {currentProject.frankenphpMode === "octane" ? "Laravel Octane Worker" : "Classic"}
+                </span>
+              </div>
+
+              {currentProject.framework !== "laravel" ? (
+                <div className="inline-note-card" data-tone="warning">
+                  <strong>Octane unavailable</strong>
+                  <span>Worker mode is Laravel-only in this phase. Non-Laravel FrankenPHP projects stay on Classic.</span>
+                </div>
+              ) : currentProject.frankenphpMode !== "octane" ? (
+                <div className="inline-note-card">
+                  <strong>Classic mode active</strong>
+                  <span>Switch to Laravel Octane Worker in Project Settings when this app has Octane installed and is ready for long-running workers.</span>
+                </div>
+              ) : (
+                <div className="stack" style={{ gap: 16 }}>
+                  <div className="route-grid" data-columns="2">
+                    <div className="detail-item">
+                      <span className="detail-label">Worker Status</span>
+                      <strong>{octaneSettings?.status ?? (octaneLoading ? "loading" : "unknown")}</strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">PID</span>
+                      <strong>{octaneSettings?.pid ?? "-"}</strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Worker Port</span>
+                      <strong>{octaneSettings?.workerPort ?? "-"}</strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Admin Port</span>
+                      <strong>{octaneSettings?.adminPort ?? "-"}</strong>
+                    </div>
+                  </div>
+
+                  <div className="form-grid">
+                    <div className="field">
+                      <label htmlFor="octane-worker-port">Worker Port</label>
+                      <input
+                        className="input"
+                        id="octane-worker-port"
+                        max={8199}
+                        min={8100}
+                        onChange={(event) => setOctaneDraft((current) => ({ ...current, workerPort: Number(event.target.value) }))}
+                        type="number"
+                        value={octaneDraft.workerPort}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="octane-admin-port">Admin Port</label>
+                      <input
+                        className="input"
+                        id="octane-admin-port"
+                        max={9199}
+                        min={9100}
+                        onChange={(event) => setOctaneDraft((current) => ({ ...current, adminPort: Number(event.target.value) }))}
+                        type="number"
+                        value={octaneDraft.adminPort}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="octane-workers">Workers</label>
+                      <input
+                        className="input"
+                        id="octane-workers"
+                        max={16}
+                        min={1}
+                        onChange={(event) => setOctaneDraft((current) => ({ ...current, workers: Number(event.target.value) }))}
+                        type="number"
+                        value={octaneDraft.workers}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="octane-max-requests">Max Requests</label>
+                      <input
+                        className="input"
+                        id="octane-max-requests"
+                        min={1}
+                        onChange={(event) => setOctaneDraft((current) => ({ ...current, maxRequests: Number(event.target.value) }))}
+                        type="number"
+                        value={octaneDraft.maxRequests}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="page-toolbar" style={{ justifyContent: "flex-start" }}>
+                    <Button busy={octaneAction === "save"} onClick={() => void handleOctaneSettingsSave()}>
+                      Save Settings
+                    </Button>
+                    <Button busy={octaneAction === "refresh"} onClick={() => void refreshOctane()}>
+                      Refresh
+                    </Button>
+                    <Button
+                      busy={octaneAction === "start" || octaneAction === "stop"}
+                      onClick={() => void handleOctaneAction(octaneSettings?.status === "running" ? "stop" : "start")}
+                      variant={octaneSettings?.status === "running" ? "secondary" : "primary"}
+                    >
+                      {octaneSettings?.status === "running" ? "Stop" : "Start"}
+                    </Button>
+                    <Button busy={octaneAction === "restart"} onClick={() => void handleOctaneAction("restart")}>
+                      Restart
+                    </Button>
+                    <Button busy={octaneAction === "reload"} onClick={() => void handleOctaneAction("reload")}>
+                      Reload
+                    </Button>
+                  </div>
+
+                  {octaneError ? <span className="error-text">{octaneError}</span> : null}
+
+                  {octanePreflight ? (
+                    <div className="stack" style={{ gap: 10 }}>
+                      <div className="page-toolbar" style={{ justifyContent: "space-between" }}>
+                        <strong>{octanePreflight.summary}</strong>
+                        <span className="status-chip" data-tone={octanePreflight.ready ? "success" : "error"}>
+                          {octanePreflight.ready ? "Ready" : "Blocked"}
+                        </span>
+                      </div>
+                      {octanePreflight.installCommands.length > 0 ? (
+                        <pre className="config-preview mono" style={{ minHeight: 0 }}>
+                          {octanePreflight.installCommands.join("\n")}
+                        </pre>
+                      ) : null}
+                      <div className="runtime-table-shell">
+                        <table className="runtime-table">
+                          <thead>
+                            <tr>
+                              <th>Check</th>
+                              <th>Status</th>
+                              <th>Message</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {octanePreflight.checks.map((check) => (
+                              <tr key={check.code}>
+                                <td><strong>{check.title}</strong></td>
+                                <td>
+                                  <span className="status-chip" data-tone={check.level === "ok" ? "success" : check.level === "warning" ? "warning" : "error"}>
+                                    {check.level}
+                                  </span>
+                                </td>
+                                <td>
+                                  <div className="runtime-table-type">
+                                    <span>{check.message}</span>
+                                    {check.suggestion ? <span className="runtime-table-note">{check.suggestion}</span> : null}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <pre className="config-preview mono" style={{ minHeight: 140, maxHeight: 220 }}>
+                    {octaneLogs || "No Octane worker log output yet."}
+                  </pre>
+                </div>
+              )}
+            </Card>
+          ) : null}
+
           <Card>
             <div className="page-header">
               <div>
@@ -1698,6 +2058,10 @@ export function ProjectInspector({
                       return {
                         ...current,
                         serverType,
+                        frankenphpMode:
+                          serverType === "frankenphp" && (current.framework ?? project.framework) === "laravel"
+                            ? current.frankenphpMode
+                            : "classic",
                         phpVersion:
                           serverType === "frankenphp" && activeFrankenphpPhpFamily
                             ? activeFrankenphpPhpFamily
@@ -1733,15 +2097,6 @@ export function ProjectInspector({
                       </option>
                     ))}
                 </select>
-                {draftServerType === "frankenphp" ? (
-                  <span className="helper-text">
-                    {activeFrankenphpPhpFamily
-                      ? `Active FrankenPHP embeds PHP ${activeFrankenphpPhpFamily}. DevNest keeps this project synced to that embedded PHP family; switch the active FrankenPHP runtime in Settings to change it.`
-                      : trackedFrankenphpPhpFamilies.length > 0
-                        ? "FrankenPHP does not need a standalone PHP runtime. Pick the embedded PHP family you want, then activate a matching FrankenPHP runtime in Settings."
-                        : "FrankenPHP does not need a standalone PHP runtime. Install or link FrankenPHP first, then DevNest will sync this project to its embedded PHP family."}
-                  </span>
-                ) : null}
               </div>
               <div className="field">
                 <label htmlFor="inspector-framework">Framework</label>
@@ -1752,6 +2107,11 @@ export function ProjectInspector({
                     setDraft((current) => ({
                       ...current,
                       framework: event.target.value as UpdateProjectPatch["framework"],
+                      frankenphpMode:
+                        (current.serverType ?? project.serverType) === "frankenphp" &&
+                        event.target.value === "laravel"
+                          ? current.frankenphpMode
+                          : "classic",
                     }))
                   }
                   value={draft.framework ?? project.framework}
@@ -1780,7 +2140,39 @@ export function ProjectInspector({
                   <option value="error">Error</option>
                 </select>
               </div>
-              <div className="field" data-span="2">
+              {draftServerType === "frankenphp" ? (
+              <>
+                <div className="field">
+                  <label htmlFor="inspector-frankenphp-mode">FrankenPHP Mode</label>
+                  <select
+                    className="select"
+                    id="inspector-frankenphp-mode"
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        frankenphpMode: event.target.value as UpdateProjectPatch["frankenphpMode"],
+                      }))
+                    }
+                    value={draftFrankenphpMode}
+                  >
+                    <option value="classic">Classic</option>
+                    <option disabled={draftFramework !== "laravel"} value="octane">
+                      Laravel Octane Worker
+                    </option>
+                  </select>
+
+                </div>
+                <div className="field">
+                  <label htmlFor="inspector-root">Document Root</label>
+                  <input
+                    className="input"
+                    id="inspector-root"
+                    onChange={(event) => setDraft((current) => ({ ...current, documentRoot: event.target.value }))}
+                    value={draft.documentRoot ?? ""}
+                  />
+                </div>
+              </>
+              ) : <div className="field" data-span="2">
                 <label htmlFor="inspector-root">Document Root</label>
                 <input
                   className="input"
@@ -1788,7 +2180,7 @@ export function ProjectInspector({
                   onChange={(event) => setDraft((current) => ({ ...current, documentRoot: event.target.value }))}
                   value={draft.documentRoot ?? ""}
                 />
-              </div>
+              </div>}
               <div className="field">
                 <label htmlFor="inspector-db-name">Database Name</label>
                 <input
@@ -1824,6 +2216,22 @@ export function ProjectInspector({
                 />
               </div>
             </div>
+
+            <span className="helper-text">
+              {draftFramework === "laravel"
+                ? "Octane mode runs a per-project Laravel worker behind the same FrankenPHP local domain."
+                : "Octane mode is disabled because this project is not marked as Laravel."}
+            </span>
+
+            {draftServerType === "frankenphp" ? (
+              <span className="helper-text">
+                {activeFrankenphpPhpFamily
+                  ? `Active FrankenPHP embeds PHP ${activeFrankenphpPhpFamily}. DevNest keeps this project synced to that embedded PHP family; switch the active FrankenPHP runtime in Settings to change it.`
+                  : trackedFrankenphpPhpFamilies.length > 0
+                    ? "FrankenPHP does not need a standalone PHP runtime. Pick the embedded PHP family you want, then activate a matching FrankenPHP runtime in Settings."
+                    : "FrankenPHP does not need a standalone PHP runtime. Install or link FrankenPHP first, then DevNest will sync this project to its embedded PHP family."}
+              </span>
+            ) : null}
 
             {draftServerType === "frankenphp" ? (
               <div className="inline-note-card" data-tone="warning">

@@ -38,6 +38,7 @@ import type { Project, UpdateProjectPatch } from "@/types/project";
 import type { RuntimeInventoryItem } from "@/types/runtime";
 import type {
   FrankenphpOctanePreflight,
+  FrankenphpOctaneWorkerHealth,
   FrankenphpOctaneWorkerSettings,
 } from "@/types/frankenphp-octane";
 import { mobilePreviewApi } from "@/lib/api/mobile-preview-api";
@@ -125,6 +126,31 @@ function envDiffFilterLabel(filter: EnvDiffFilter): string {
   }
 }
 
+function formatDurationSeconds(value?: number | null): string {
+  if (value === null || value === undefined) {
+    return "-";
+  }
+
+  const seconds = Math.max(0, Math.floor(value));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  if (minutes > 0) {
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+
+  return `${remainingSeconds}s`;
+}
+
+function formatOptionalTimestamp(value?: string | null): string {
+  return value ? formatUpdatedAt(value) : "-";
+}
+
 export function ProjectInspector({
   loading,
   onDelete,
@@ -133,6 +159,7 @@ export function ProjectInspector({
 }: ProjectInspectorProps) {
   const navigate = useNavigate();
   const inspectorRootRef = useRef<HTMLDivElement | null>(null);
+  const octaneAutoRestartKeyRef = useRef<string | null>(null);
   const [draft, setDraft] = useState<UpdateProjectPatch>({});
   const [activeTab, setActiveTab] = useState<ProjectInspectorTab>("overview");
   const [mobilePreviewOpen, setMobilePreviewOpen] = useState(false);
@@ -161,6 +188,7 @@ export function ProjectInspector({
   const [runtimeInventory, setRuntimeInventory] = useState<RuntimeInventoryItem[]>([]);
   const [octaneSettings, setOctaneSettings] = useState<FrankenphpOctaneWorkerSettings | null>(null);
   const [octanePreflight, setOctanePreflight] = useState<FrankenphpOctanePreflight | null>(null);
+  const [octaneHealth, setOctaneHealth] = useState<FrankenphpOctaneWorkerHealth | null>(null);
   const [octaneLogs, setOctaneLogs] = useState("");
   const [octaneError, setOctaneError] = useState<string>();
   const [octaneLoading, setOctaneLoading] = useState(false);
@@ -211,10 +239,12 @@ export function ProjectInspector({
       setCopyingEnvReviewKeys(false);
       setOctaneSettings(null);
       setOctanePreflight(null);
+      setOctaneHealth(null);
       setOctaneLogs("");
       setOctaneError(undefined);
       setOctaneLoading(false);
       setOctaneAction(null);
+      octaneAutoRestartKeyRef.current = null;
       return;
     }
 
@@ -380,10 +410,12 @@ export function ProjectInspector({
     if (!project || project.serverType !== "frankenphp" || activeTab !== "runtime") {
       setOctaneSettings(null);
       setOctanePreflight(null);
+      setOctaneHealth(null);
       setOctaneLogs("");
       setOctaneError(undefined);
       setOctaneLoading(false);
       setOctaneAction(null);
+      octaneAutoRestartKeyRef.current = null;
       return;
     }
 
@@ -394,9 +426,10 @@ export function ProjectInspector({
     Promise.allSettled([
       frankenphpOctaneApi.getSettings(project.id),
       frankenphpOctaneApi.preflight(project.id),
+      frankenphpOctaneApi.health(project.id),
       frankenphpOctaneApi.readLogs(project.id, 80),
     ])
-      .then(([settingsResult, preflightResult, logsResult]) => {
+      .then(([settingsResult, preflightResult, healthResult, logsResult]) => {
         if (cancelled) {
           return;
         }
@@ -418,6 +451,10 @@ export function ProjectInspector({
           setOctanePreflight(preflightResult.value);
         }
 
+        if (healthResult.status === "fulfilled") {
+          setOctaneHealth(healthResult.value);
+        }
+
         if (logsResult.status === "fulfilled") {
           setOctaneLogs(logsResult.value.content ?? "");
         }
@@ -432,6 +469,74 @@ export function ProjectInspector({
       cancelled = true;
     };
   }, [activeTab, actionName, project]);
+
+  useEffect(() => {
+    if (
+      !project ||
+      activeTab !== "runtime" ||
+      project.serverType !== "frankenphp" ||
+      project.frankenphpMode !== "octane" ||
+      !octaneHealth?.restartRecommended ||
+      octaneSettings?.status !== "running" ||
+      octaneLoading ||
+      octaneAction !== null
+    ) {
+      return;
+    }
+
+    const restartKey = [
+      project.id,
+      octaneHealth.lastStartedAt ?? "unknown-start",
+      octaneHealth.restartReason ?? "changed",
+    ].join(":");
+
+    if (octaneAutoRestartKeyRef.current === restartKey) {
+      return;
+    }
+
+    octaneAutoRestartKeyRef.current = restartKey;
+    void handleOctaneAction("restart", "auto");
+  }, [
+    activeTab,
+    octaneAction,
+    octaneHealth?.lastStartedAt,
+    octaneHealth?.restartReason,
+    octaneHealth?.restartRecommended,
+    octaneLoading,
+    octaneSettings?.status,
+    project,
+  ]);
+
+  useEffect(() => {
+    if (
+      !project ||
+      activeTab !== "runtime" ||
+      project.serverType !== "frankenphp" ||
+      project.frankenphpMode !== "octane" ||
+      octaneSettings?.status !== "running"
+    ) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (octaneAction !== null || octaneLoading) {
+        return;
+      }
+
+      frankenphpOctaneApi
+        .health(project.id)
+        .then(setOctaneHealth)
+        .catch(() => undefined);
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [
+    activeTab,
+    octaneAction,
+    octaneLoading,
+    octaneSettings?.status,
+    project,
+  ]);
 
   useEffect(() => {
     if (!project || activeTab !== "envVars") {
@@ -543,6 +648,54 @@ export function ProjectInspector({
     null;
   const liveStatus = getLiveProjectStatus(currentProject, services);
   const runtimeRunning = runtimeService?.status === "running";
+  const octaneBusy = octaneLoading || octaneAction !== null;
+  const runtimeTabBootLoading =
+    activeTab === "runtime" &&
+    currentProject.serverType === "frankenphp" &&
+    currentProject.frankenphpMode === "octane" &&
+    octaneLoading &&
+    !octaneSettings &&
+    !octaneHealth &&
+    !octanePreflight;
+  const octaneBusyCopy =
+    octaneAction === "save"
+      ? {
+          title: "Saving Octane settings",
+          message: "DevNest is updating the managed worker profile.",
+        }
+      : octaneAction === "refresh"
+        ? {
+            title: "Refreshing Octane state",
+            message: "DevNest is reading worker status, health, preflight checks, and logs.",
+          }
+        : octaneAction === "start"
+          ? {
+              title: "Starting Octane worker",
+              message: "DevNest is preparing the FrankenPHP ingress and project worker.",
+            }
+          : octaneAction === "stop"
+            ? {
+                title: "Stopping Octane worker",
+                message: "DevNest is shutting down the managed project worker.",
+              }
+            : octaneAction === "restart"
+              ? {
+                  title: octaneHealth?.restartRecommended
+                    ? "Auto restarting Octane"
+                    : "Restarting Octane worker",
+                  message: octaneHealth?.restartRecommended
+                    ? "Project files changed, so DevNest is restarting the Laravel Octane worker."
+                    : "DevNest is cycling the Laravel Octane worker.",
+                }
+              : octaneAction === "reload"
+                ? {
+                    title: "Reloading Octane worker",
+                    message: "DevNest is sending the managed reload action.",
+                  }
+                : {
+                    title: "Loading Octane runtime",
+                    message: "DevNest is reading worker status, health, preflight checks, and logs.",
+                  };
   const diagnosticsLoading = loadingProjectId === currentProject.id;
   const lastRunAt = lastRunAtByProject[currentProject.id];
   const runtimeCompatibilityIssues: string[] = [];
@@ -845,8 +998,10 @@ export function ProjectInspector({
         frankenphpOctaneApi.preflight(currentProject.id),
         frankenphpOctaneApi.readLogs(currentProject.id, 80),
       ]);
+      const health = await frankenphpOctaneApi.health(currentProject.id);
       setOctaneSettings(settings);
       setOctanePreflight(preflight);
+      setOctaneHealth(health);
       setOctaneLogs(logs.content ?? "");
       setOctaneDraft({
         workerPort: settings.workerPort,
@@ -874,6 +1029,7 @@ export function ProjectInspector({
         maxRequests: settings.maxRequests,
       });
       setOctanePreflight(await frankenphpOctaneApi.preflight(currentProject.id));
+      setOctaneHealth(await frankenphpOctaneApi.health(currentProject.id));
       pushToast({
         tone: "success",
         title: "Octane settings saved",
@@ -888,7 +1044,10 @@ export function ProjectInspector({
     }
   }
 
-  async function handleOctaneAction(action: "start" | "stop" | "restart" | "reload") {
+  async function handleOctaneAction(
+    action: "start" | "stop" | "restart" | "reload",
+    source: "manual" | "auto" = "manual",
+  ) {
     setOctaneAction(action);
     setOctaneError(undefined);
     try {
@@ -904,10 +1063,14 @@ export function ProjectInspector({
       const logs = await frankenphpOctaneApi.readLogs(currentProject.id, 80);
       setOctaneLogs(logs.content ?? "");
       setOctanePreflight(await frankenphpOctaneApi.preflight(currentProject.id));
+      setOctaneHealth(await frankenphpOctaneApi.health(currentProject.id));
       pushToast({
         tone: action === "stop" ? "info" : "success",
-        title: `Octane ${action}`,
-        message: `Laravel Octane worker ${action === "reload" ? "reload signal sent" : `${action}ed`}.`,
+        title: source === "auto" ? "Octane auto restarted" : `Octane ${action}`,
+        message:
+          source === "auto"
+            ? "Project files changed, so DevNest restarted the Laravel Octane worker."
+            : `Laravel Octane worker ${action === "reload" ? "reload signal sent" : `${action}ed`}.`,
       });
     } catch (error) {
       const message = getAppErrorMessage(error, `Could not ${action} the Octane worker.`);
@@ -1305,6 +1468,17 @@ export function ProjectInspector({
         role="tabpanel"
       >
         {activeTab === "runtime" ? (
+        runtimeTabBootLoading ? (
+          <Card className="tab-loading-card">
+            <div aria-live="polite" className="tab-loading-content" role="status">
+              <span aria-hidden="true" className="loading-spinner" />
+              <div className="loading-scrim-copy">
+                <strong>Loading Runtime tab</strong>
+                <span>DevNest is preparing service status, Octane health, preflight checks, and logs.</span>
+              </div>
+            </div>
+          </Card>
+        ) : (
         <div className="stack">
           <Card>
             <div className="page-header">
@@ -1411,7 +1585,7 @@ export function ProjectInspector({
           </Card>
 
           {currentProject.serverType === "frankenphp" ? (
-            <Card>
+            <Card className="route-loading-shell">
               <div className="page-header">
                 <div>
                   <h2>FrankenPHP Mode</h2>
@@ -1434,7 +1608,7 @@ export function ProjectInspector({
                 </div>
               ) : (
                 <div className="stack" style={{ gap: 16 }}>
-                  <div className="route-grid" data-columns="2">
+                  <div className="route-grid" data-columns="3">
                     <div className="detail-item">
                       <span className="detail-label">Worker Status</span>
                       <strong>{octaneSettings?.status ?? (octaneLoading ? "loading" : "unknown")}</strong>
@@ -1451,13 +1625,67 @@ export function ProjectInspector({
                       <span className="detail-label">Admin Port</span>
                       <strong>{octaneSettings?.adminPort ?? "-"}</strong>
                     </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Uptime</span>
+                      <strong>{formatDurationSeconds(octaneHealth?.uptimeSeconds)}</strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Requests</span>
+                      <strong>
+                        {octaneHealth?.metricsAvailable
+                          ? octaneHealth.requestCount ?? "No counter"
+                          : "Metrics off"}
+                      </strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Last Start</span>
+                      <strong>{formatOptionalTimestamp(octaneHealth?.lastStartedAt)}</strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Last Restart</span>
+                      <strong>{formatOptionalTimestamp(octaneHealth?.lastRestartedAt ?? octaneHealth?.lastStartedAt)}</strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Last Error</span>
+                      <strong>{octaneHealth?.lastError ?? "None"}</strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Health Checked</span>
+                      <strong>{formatOptionalTimestamp(octaneHealth?.generatedAt)}</strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Public Origin</span>
+                      <strong>{currentProject.sslEnabled ? "https" : "http"}://{currentProject.domain}</strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Worker Target</span>
+                      <strong>127.0.0.1:{octaneHealth?.workerPort ?? octaneSettings?.workerPort ?? "-"}</strong>
+                    </div>
                   </div>
 
-                  <div className="form-grid">
+                  {octaneHealth?.runtime ? (
+                    <div className="stack" style={{ gap: 10 }}>
+                      <div className="page-toolbar" style={{ justifyContent: "space-between" }}>
+                        <div className="runtime-table-type">
+                          <strong>Active FrankenPHP Runtime</strong>
+                          <span className="runtime-table-note">
+                            {octaneHealth.runtime.version}
+                            {octaneHealth.runtime.phpFamily ? ` embeds PHP ${octaneHealth.runtime.phpFamily}` : ""}
+                          </span>
+                        </div>
+                        <span className="status-chip" data-tone="success">
+                          {octaneHealth.runtime.managedPhpConfigPath ?? "-"}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="form-grid" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
                     <div className="field">
                       <label htmlFor="octane-worker-port">Worker Port</label>
                       <input
                         className="input"
+                        disabled={octaneBusy}
                         id="octane-worker-port"
                         max={8199}
                         min={8100}
@@ -1470,6 +1698,7 @@ export function ProjectInspector({
                       <label htmlFor="octane-admin-port">Admin Port</label>
                       <input
                         className="input"
+                        disabled={octaneBusy}
                         id="octane-admin-port"
                         max={9199}
                         min={9100}
@@ -1482,6 +1711,7 @@ export function ProjectInspector({
                       <label htmlFor="octane-workers">Workers</label>
                       <input
                         className="input"
+                        disabled={octaneBusy}
                         id="octane-workers"
                         max={16}
                         min={1}
@@ -1494,6 +1724,7 @@ export function ProjectInspector({
                       <label htmlFor="octane-max-requests">Max Requests</label>
                       <input
                         className="input"
+                        disabled={octaneBusy}
                         id="octane-max-requests"
                         min={1}
                         onChange={(event) => setOctaneDraft((current) => ({ ...current, maxRequests: Number(event.target.value) }))}
@@ -1504,23 +1735,41 @@ export function ProjectInspector({
                   </div>
 
                   <div className="page-toolbar" style={{ justifyContent: "flex-start" }}>
-                    <Button busy={octaneAction === "save"} onClick={() => void handleOctaneSettingsSave()}>
+                    <Button
+                      busy={octaneAction === "save"}
+                      disabled={octaneBusy && octaneAction !== "save"}
+                      onClick={() => void handleOctaneSettingsSave()}
+                    >
                       Save Settings
                     </Button>
-                    <Button busy={octaneAction === "refresh"} onClick={() => void refreshOctane()}>
+                    <Button
+                      busy={octaneAction === "refresh"}
+                      disabled={octaneBusy && octaneAction !== "refresh"}
+                      onClick={() => void refreshOctane()}
+                    >
                       Refresh
                     </Button>
                     <Button
                       busy={octaneAction === "start" || octaneAction === "stop"}
+                      disabled={octaneBusy && octaneAction !== "start" && octaneAction !== "stop"}
                       onClick={() => void handleOctaneAction(octaneSettings?.status === "running" ? "stop" : "start")}
                       variant={octaneSettings?.status === "running" ? "secondary" : "primary"}
                     >
                       {octaneSettings?.status === "running" ? "Stop" : "Start"}
                     </Button>
-                    <Button busy={octaneAction === "restart"} onClick={() => void handleOctaneAction("restart")}>
+                    <Button
+                      busy={octaneAction === "restart"}
+                      busyLabel={octaneHealth?.restartRecommended ? "Auto restarting..." : "Restarting..."}
+                      disabled={octaneBusy && octaneAction !== "restart"}
+                      onClick={() => void handleOctaneAction("restart")}
+                    >
                       Restart
                     </Button>
-                    <Button busy={octaneAction === "reload"} onClick={() => void handleOctaneAction("reload")}>
+                    <Button
+                      busy={octaneAction === "reload"}
+                      disabled={octaneBusy && octaneAction !== "reload"}
+                      onClick={() => void handleOctaneAction("reload")}
+                    >
                       Reload
                     </Button>
                   </div>
@@ -1571,12 +1820,20 @@ export function ProjectInspector({
                       </div>
                     </div>
                   ) : null}
-
-                  <pre className="config-preview mono" style={{ minHeight: 140, maxHeight: 220 }}>
-                    {octaneLogs || "No Octane worker log output yet."}
-                  </pre>
                 </div>
               )}
+
+              {octaneBusy && currentProject.frankenphpMode === "octane" ? (
+                <div aria-live="polite" className="loading-scrim" role="status">
+                  <div className="loading-scrim-card">
+                    <span aria-hidden="true" className="loading-spinner" />
+                    <div className="loading-scrim-copy">
+                      <strong>{octaneBusyCopy.title}</strong>
+                      <span>{octaneBusyCopy.message}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </Card>
           ) : null}
 
@@ -1598,6 +1855,7 @@ export function ProjectInspector({
             </pre>
           </Card>
         </div>
+        )
         ) : null}
       </div>
 

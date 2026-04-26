@@ -405,8 +405,8 @@ function findRuntimeUpdatePackage(
 }
 
 function runtimeCanOfferUpdateTo(
-  runtime: Pick<RuntimeInventoryItem, "runtimeType" | "version">,
-  candidate: Pick<RuntimePackage, "runtimeType" | "version">,
+  runtime: Pick<RuntimeInventoryItem, "runtimeType" | "version" | "phpFamily">,
+  candidate: Pick<RuntimePackage, "runtimeType" | "version" | "phpFamily">,
 ): boolean {
   if (candidate.runtimeType !== runtime.runtimeType) {
     return false;
@@ -420,11 +420,24 @@ function runtimeCanOfferUpdateTo(
     return runtimeVersionFamily(candidate.version) === runtimeVersionFamily(runtime.version);
   }
 
+  if (runtime.runtimeType === "frankenphp" && runtime.phpFamily && candidate.phpFamily) {
+    return runtime.phpFamily.toLowerCase() === candidate.phpFamily.toLowerCase();
+  }
+
   return true;
 }
 
-function runtimeCatalogKey(runtimeType: RuntimeType, version: string): string {
-  return `${runtimeType}:${normalizeCatalogVersion(version)}`;
+function runtimeCatalogKey(
+  runtimeType: RuntimeType,
+  version: string,
+  phpFamily?: string | null,
+): string {
+  const normalizedVersion = normalizeCatalogVersion(version);
+  if (runtimeType === "frankenphp" && phpFamily) {
+    return `${runtimeType}:${normalizedVersion}:php-${phpFamily.toLowerCase()}`;
+  }
+
+  return `${runtimeType}:${normalizedVersion}`;
 }
 
 function serviceLabel(name: ServiceName): string {
@@ -5003,7 +5016,13 @@ function SettingsRoute() {
   const installedPackageRuntimeIds = useMemo(
     () =>
       new Map(
-        runtimes.map((runtime) => [runtimeCatalogKey(runtime.runtimeType, runtime.version), runtime] as const),
+        runtimes.map(
+          (runtime) =>
+            [
+              runtimeCatalogKey(runtime.runtimeType, runtime.version, runtime.phpFamily),
+              runtime,
+            ] as const,
+        ),
       ),
     [runtimes],
   );
@@ -5016,7 +5035,11 @@ function SettingsRoute() {
             if (
               nextPackage &&
               installedPackageRuntimeIds.has(
-                runtimeCatalogKey(nextPackage.runtimeType, nextPackage.version),
+                runtimeCatalogKey(
+                  nextPackage.runtimeType,
+                  nextPackage.version,
+                  nextPackage.phpFamily,
+                ),
               )
             ) {
               return [runtime.id, null] as const;
@@ -5410,6 +5433,7 @@ function SettingsRoute() {
                   <tr>
                     <th>Runtime</th>
                     <th>Version</th>
+                    {family === "web" ? <th>PHP Family</th> : null}
                     <th>Status</th>
                     <th>Update</th>
                     <th>Updated</th>
@@ -5445,6 +5469,25 @@ function SettingsRoute() {
                           </div>
                         </td>
                         <td>{runtime.version}</td>
+                        {family === "web" ? (
+                          <td>
+                            {runtime.runtimeType === "frankenphp" ? (
+                              <div className="runtime-status-copy">
+                                <span
+                                  className="status-chip"
+                                  data-tone={runtime.phpFamily ? "success" : "warning"}
+                                >
+                                  {runtime.phpFamily ? `PHP ${runtime.phpFamily}` : "Unknown"}
+                                </span>
+                                <span className="runtime-table-note">
+                                  Embedded in the selected FrankenPHP binary.
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="runtime-table-note">Uses linked PHP runtime</span>
+                            )}
+                          </td>
+                        ) : null}
                         <td>
                           <div className="runtime-status-copy">
                             <span className="status-chip" data-tone={status.tone}>
@@ -5513,6 +5556,7 @@ function SettingsRoute() {
                   <tr>
                     <th>Package</th>
                     <th>Version</th>
+                    {family === "web" ? <th>PHP Family</th> : null}
                     <th>Platform</th>
                     <th>Status</th>
                     <th>Actions</th>
@@ -5522,7 +5566,11 @@ function SettingsRoute() {
                   {packages.map((runtimePackage) => {
                     const installedRuntime =
                       installedPackageRuntimeIds.get(
-                        `${runtimePackage.runtimeType}:${runtimePackage.version}`,
+                        runtimeCatalogKey(
+                          runtimePackage.runtimeType,
+                          runtimePackage.version,
+                          runtimePackage.phpFamily,
+                        ),
                       ) ?? null;
                     const currentTask =
                       installTask?.packageId === runtimePackage.id ? installTask : null;
@@ -5539,6 +5587,27 @@ function SettingsRoute() {
                           </div>
                         </td>
                         <td>{runtimePackage.version}</td>
+                        {family === "web" ? (
+                          <td>
+                            {runtimePackage.runtimeType === "frankenphp" ? (
+                              <div className="runtime-status-copy">
+                                <span
+                                  className="status-chip"
+                                  data-tone={runtimePackage.phpFamily ? "success" : "warning"}
+                                >
+                                  {runtimePackage.phpFamily
+                                    ? `PHP ${runtimePackage.phpFamily}`
+                                    : "Unknown"}
+                                </span>
+                                <span className="runtime-table-note">
+                                  Select a build matching the projects that will use FrankenPHP.
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="runtime-table-note">External PHP runtime</span>
+                            )}
+                          </td>
+                        ) : null}
                         <td>
                           {runtimePackage.platform} {runtimePackage.arch}
                         </td>

@@ -2272,8 +2272,10 @@ a {
   place-items: center;
   padding: 24px;
   border-radius: 24px;
-  background: rgba(5, 10, 18, 0.62);
-  backdrop-filter: blur(12px);
+  pointer-events: none;
+  contain: paint;
+  background: rgba(5, 10, 18, 0.54);
+  animation: scrim-fade-in 90ms ease-out;
 }
 
 .loading-scrim-card {
@@ -2303,6 +2305,25 @@ a {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.tab-loading-card {
+  min-height: min(560px, calc(100vh - 260px));
+  display: grid;
+  place-items: center;
+}
+
+.tab-loading-content {
+  width: min(420px, 100%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 18px;
+  border: 1px solid rgba(171, 195, 231, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent),
+    rgba(8, 14, 23, 0.84);
 }
 
 .loading-spinner {
@@ -2886,6 +2907,16 @@ a {
 
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes scrim-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
   }
 }
 

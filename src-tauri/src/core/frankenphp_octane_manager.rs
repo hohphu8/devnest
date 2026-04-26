@@ -2,22 +2,25 @@ use crate::core::{log_reader, ports, runtime_registry, service_manager};
 use crate::error::AppError;
 use crate::models::frankenphp_octane::{
     FrankenphpOctanePreflight, FrankenphpOctanePreflightCheck, FrankenphpOctanePreflightLevel,
-    FrankenphpOctaneWorkerSettings, FrankenphpOctaneWorkerStatus,
+    FrankenphpOctaneWorkerHealth, FrankenphpOctaneWorkerSettings, FrankenphpOctaneWorkerStatus,
+    FrankenphpRuntimeExtensionHealth, FrankenphpRuntimeHealth,
 };
 use crate::models::project::{FrameworkType, FrankenphpMode, Project, ServerType};
 use crate::models::runtime::{RuntimeType, RuntimeVersion};
 use crate::models::service::{ServiceName, ServiceStatus};
 use crate::state::{AppState, ManagedWorkerProcess};
 use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
-use crate::storage::repositories::{ProjectRepository, RuntimeVersionRepository, now_iso};
-use crate::utils::process::{configure_background_command, is_process_running, kill_process_tree};
+use crate::storage::repositories::{
+    PhpExtensionOverrideRepository, ProjectRepository, RuntimeVersionRepository, now_iso,
+};
+use crate::utils::process::{configure_background_command, kill_process_tree};
 use rusqlite::Connection;
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 const OCTANE_CADDYFILE_PARTS: [&str; 6] =
     ["vendor", "laravel", "octane", "src", "Commands", "stubs"];
@@ -152,6 +155,255 @@ fn read_dotenv_value(project_path: &Path, key: &str) -> Option<String> {
     }
 
     None
+}
+
+fn parse_timestamp_seconds(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.timestamp())
+}
+
+fn uptime_seconds(started_at: Option<&str>) -> Option<i64> {
+    let started_at = parse_timestamp_seconds(started_at?)?;
+    let now = chrono::Utc::now().timestamp();
+    Some(now.saturating_sub(started_at))
+}
+
+fn path_modified_after(path: &Path, started_at: i64) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+
+    if metadata.is_file() {
+        return metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|modified| modified.as_secs() as i64 > started_at)
+            .unwrap_or(false);
+    }
+
+    if !metadata.is_dir() {
+        return false;
+    }
+
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+
+    for entry in entries.flatten() {
+        if path_modified_after(&entry.path(), started_at) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn restart_recommendation(
+    project: &Project,
+    settings: &FrankenphpOctaneWorkerSettings,
+) -> (bool, Option<String>) {
+    if !matches!(settings.status, FrankenphpOctaneWorkerStatus::Running) {
+        return (false, None);
+    }
+
+    let Some(started_at) = settings
+        .last_started_at
+        .as_deref()
+        .and_then(parse_timestamp_seconds)
+    else {
+        return (false, None);
+    };
+
+    let project_path = Path::new(&project.path);
+    for (label, path) in [
+        (".env", project_path.join(".env")),
+        ("Composer metadata", project_path.join("composer.json")),
+        ("Composer lock", project_path.join("composer.lock")),
+        (
+            "Laravel bootstrap",
+            project_path.join("bootstrap").join("app.php"),
+        ),
+        ("Laravel application code", project_path.join("app")),
+        ("Laravel routes", project_path.join("routes")),
+        ("Laravel config", project_path.join("config")),
+        ("Laravel database code", project_path.join("database")),
+        (
+            "Laravel Blade views",
+            project_path.join("resources").join("views"),
+        ),
+    ] {
+        if path_modified_after(&path, started_at) {
+            return (
+                true,
+                Some(format!("{label} changed after this Octane worker started.")),
+            );
+        }
+    }
+
+    (false, None)
+}
+
+fn parse_request_count_from_metrics(body: &str) -> Option<i64> {
+    let mut total = 0f64;
+    let mut found = false;
+
+    for line in body.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let lower = line.to_ascii_lowercase();
+        let metric_name = lower.split('{').next().unwrap_or(lower.as_str());
+        let request_counter = metric_name.contains("request")
+            && (metric_name.ends_with("_total") || metric_name.ends_with("_count"));
+        if !request_counter {
+            continue;
+        }
+
+        let Some(value) = line
+            .split_whitespace()
+            .last()
+            .and_then(|value| value.parse::<f64>().ok())
+        else {
+            continue;
+        };
+        if value.is_finite() {
+            total += value;
+            found = true;
+        }
+    }
+
+    found.then_some(total.round() as i64)
+}
+
+fn worker_metrics(admin_port: i64) -> (bool, Option<i64>) {
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(800))
+        .build()
+    else {
+        return (false, None);
+    };
+
+    let url = format!("http://localhost:{admin_port}/metrics");
+    let Ok(response) = client
+        .get(url)
+        .send()
+        .and_then(|response| response.error_for_status())
+    else {
+        return (false, None);
+    };
+
+    let Ok(body) = response.text() else {
+        return (true, None);
+    };
+
+    (true, parse_request_count_from_metrics(&body))
+}
+
+fn frankenphp_runtime_health(
+    connection: &Connection,
+    state: &AppState,
+) -> Result<Option<FrankenphpRuntimeHealth>, AppError> {
+    let Some(runtime) =
+        RuntimeVersionRepository::find_active_by_type(connection, &RuntimeType::Frankenphp)?
+    else {
+        return Ok(None);
+    };
+
+    let runtime_path = PathBuf::from(&runtime.path);
+    if !runtime_path.exists() {
+        return Ok(Some(FrankenphpRuntimeHealth {
+            runtime_id: runtime.id,
+            version: runtime.version,
+            php_family: None,
+            path: runtime.path,
+            managed_php_config_path: None,
+            extensions: vec![
+                FrankenphpRuntimeExtensionHealth {
+                    extension_name: "redis".to_string(),
+                    available: false,
+                    enabled: false,
+                },
+                FrankenphpRuntimeExtensionHealth {
+                    extension_name: "mbstring".to_string(),
+                    available: false,
+                    enabled: false,
+                },
+                FrankenphpRuntimeExtensionHealth {
+                    extension_name: "pdo_mysql".to_string(),
+                    available: false,
+                    enabled: false,
+                },
+            ],
+        }));
+    }
+
+    let runtime_home = runtime_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let php_family = runtime_registry::frankenphp_embedded_php_family(&runtime_path).ok();
+    let available_extensions = php_family
+        .as_deref()
+        .map(|family| {
+            runtime_registry::frankenphp_available_php_extensions(
+                &runtime_home,
+                &state.workspace_dir,
+                family,
+            )
+        })
+        .unwrap_or_default();
+    let label = php_family
+        .as_deref()
+        .map(|family| format!("FrankenPHP {} (PHP {family})", runtime.version))
+        .unwrap_or_else(|| format!("FrankenPHP {}", runtime.version));
+    let extension_states = PhpExtensionOverrideRepository::list_for_runtime(
+        connection,
+        &runtime.id,
+        &label,
+        &available_extensions,
+    )?;
+    let managed_php_config_path = runtime_registry::frankenphp_managed_php_environment(
+        connection,
+        &state.workspace_dir,
+        &runtime_path,
+        Some(&runtime.id),
+    )
+    .ok()
+    .and_then(|env| {
+        env.into_iter()
+            .find(|(key, _)| key == "PHPRC")
+            .map(|(_, value)| value)
+    });
+
+    let extensions = ["redis", "mbstring", "pdo_mysql"]
+        .into_iter()
+        .map(|extension_name| {
+            let enabled = extension_states
+                .iter()
+                .find(|item| item.extension_name == extension_name)
+                .map(|item| item.enabled)
+                .unwrap_or(false);
+            FrankenphpRuntimeExtensionHealth {
+                extension_name: extension_name.to_string(),
+                available: available_extensions
+                    .iter()
+                    .any(|item| item == extension_name),
+                enabled,
+            }
+        })
+        .collect();
+
+    Ok(Some(FrankenphpRuntimeHealth {
+        runtime_id: runtime.id,
+        version: runtime.version,
+        php_family,
+        path: runtime.path,
+        managed_php_config_path,
+        extensions,
+    }))
 }
 
 fn ensure_frankenphp_worker_file(project: &Project) -> Result<PathBuf, AppError> {
@@ -318,12 +570,26 @@ fn save_running(
     pid: u32,
 ) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
     let timestamp = now_iso()?;
+    let current = FrankenphpOctaneWorkerRepository::get(connection, project_id)?;
+    let keep_existing_started_at = current
+        .as_ref()
+        .map(|settings| {
+            matches!(settings.status, FrankenphpOctaneWorkerStatus::Running)
+                && settings.pid == Some(i64::from(pid))
+                && settings.last_started_at.is_some()
+        })
+        .unwrap_or(false);
+
     FrankenphpOctaneWorkerRepository::set_status(
         connection,
         project_id,
         &FrankenphpOctaneWorkerStatus::Running,
         Some(i64::from(pid)),
-        Some(timestamp.as_str()),
+        if keep_existing_started_at {
+            None
+        } else {
+            Some(timestamp.as_str())
+        },
         None,
         None,
     )
@@ -611,8 +877,7 @@ pub fn preflight(
                     },
                     "Active FrankenPHP runtime",
                     format!(
-                        "Active FrankenPHP is {} and embeds PHP {}.",
-                        runtime.path, family
+                        "Active FrankenPHP and embeds PHP {}.", family
                     ),
                     if matches_family {
                         None
@@ -650,7 +915,7 @@ pub fn preflight(
                 "FRANKENPHP_PHP_MBSTRING",
                 FrankenphpOctanePreflightLevel::Ok,
                 "Managed PHP mbstring",
-                "The active FrankenPHP PHP runtime loads mbstring through DevNest's managed PHP configuration.",
+                "Through DevNest's managed PHP configuration.",
                 None,
                 false,
             )),
@@ -676,7 +941,7 @@ pub fn preflight(
             "OCTANE_START_METHOD",
             FrankenphpOctanePreflightLevel::Ok,
             "Windows start method",
-            "DevNest starts FrankenPHP directly with Laravel Octane's Caddyfile, so the Artisan signal wrapper and pcntl are not required for this worker lane.",
+            "DevNest starts FrankenPHP directly with Laravel Octane's Caddyfile.",
             None,
             false,
         ));
@@ -786,7 +1051,7 @@ pub fn get_status(
     }
 
     if let Some(pid) = current.pid {
-        if is_process_running(pid as u32)? {
+        if detect_running_worker_on_ports(&current)? == Some(pid as u32) {
             return save_running(connection, project_id, pid as u32);
         }
         return save_stopped(connection, project_id);
@@ -797,6 +1062,42 @@ pub fn get_status(
     }
 
     Ok(current)
+}
+
+pub fn health(
+    connection: &Connection,
+    state: &AppState,
+    project_id: &str,
+) -> Result<FrankenphpOctaneWorkerHealth, AppError> {
+    let project = validate_project_is_octane_target(connection, project_id)?;
+    let settings = get_status(connection, state, project_id)?;
+    let log_tail = log_reader::read_tail(Path::new(&settings.log_path), 80).unwrap_or_default();
+    let (metrics_available, request_count) =
+        if matches!(settings.status, FrankenphpOctaneWorkerStatus::Running) {
+            worker_metrics(settings.admin_port)
+        } else {
+            (false, None)
+        };
+    let (restart_recommended, restart_reason) = restart_recommendation(&project, &settings);
+
+    Ok(FrankenphpOctaneWorkerHealth {
+        project_id: project_id.to_string(),
+        status: settings.status.clone(),
+        pid: settings.pid,
+        uptime_seconds: uptime_seconds(settings.last_started_at.as_deref()),
+        worker_port: settings.worker_port,
+        admin_port: settings.admin_port,
+        last_started_at: settings.last_started_at,
+        last_restarted_at: None,
+        last_error: settings.last_error,
+        request_count,
+        metrics_available,
+        log_tail,
+        restart_recommended,
+        restart_reason,
+        runtime: frankenphp_runtime_health(connection, state)?,
+        generated_at: now_iso()?,
+    })
 }
 
 fn runtime_command_env(
@@ -830,7 +1131,7 @@ fn wait_for_worker_port(
     worker_port: i64,
     log_path: &Path,
 ) -> Result<(), AppError> {
-    for _ in 0..24 {
+    for _ in 0..120 {
         match child.try_wait() {
             Ok(Some(status)) => {
                 let error_message = status_message(project_name, &status).unwrap_or_else(|| {
@@ -1064,8 +1365,10 @@ pub fn stop(
     } else if let Some(pid) =
         FrankenphpOctaneWorkerRepository::get(connection, project_id)?.and_then(|value| value.pid)
     {
-        if is_process_running(pid as u32)? {
-            kill_process_tree(pid as u32)?;
+        if let Some(settings) = FrankenphpOctaneWorkerRepository::get(connection, project_id)? {
+            if detect_running_worker_on_ports(&settings)? == Some(pid as u32) {
+                kill_process_tree(pid as u32)?;
+            }
         }
     }
 

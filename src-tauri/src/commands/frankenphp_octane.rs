@@ -2,7 +2,7 @@ use crate::core::log_reader::ProjectWorkerLogPayload;
 use crate::core::{frankenphp_octane_manager, service_manager};
 use crate::error::AppError;
 use crate::models::frankenphp_octane::{
-    FrankenphpOctanePreflight, FrankenphpOctaneWorkerSettings,
+    FrankenphpOctanePreflight, FrankenphpOctaneWorkerHealth, FrankenphpOctaneWorkerSettings,
     UpdateFrankenphpOctaneWorkerSettingsInput,
 };
 use crate::models::project::FrankenphpMode;
@@ -74,6 +74,15 @@ pub fn get_project_frankenphp_worker_status(
 ) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
     let connection = connection_from_state(&state)?;
     frankenphp_octane_manager::get_status(&connection, &state, &project_id)
+}
+
+#[tauri::command]
+pub fn get_project_frankenphp_worker_health(
+    project_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<FrankenphpOctaneWorkerHealth, AppError> {
+    let connection = connection_from_state(&state)?;
+    frankenphp_octane_manager::health(&connection, &state, &project_id)
 }
 
 #[tauri::command]

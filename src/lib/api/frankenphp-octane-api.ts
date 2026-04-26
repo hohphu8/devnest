@@ -1,6 +1,7 @@
 import { tauriInvoke } from "@/lib/tauri";
 import type {
   FrankenphpOctanePreflight,
+  FrankenphpOctaneWorkerHealth,
   FrankenphpOctaneWorkerSettings,
   UpdateFrankenphpOctaneWorkerSettingsInput,
 } from "@/types/frankenphp-octane";
@@ -22,6 +23,10 @@ export const frankenphpOctaneApi = {
     }),
   status: (projectId: string) =>
     tauriInvoke<FrankenphpOctaneWorkerSettings>("get_project_frankenphp_worker_status", {
+      projectId,
+    }),
+  health: (projectId: string) =>
+    tauriInvoke<FrankenphpOctaneWorkerHealth>("get_project_frankenphp_worker_health", {
       projectId,
     }),
   start: (projectId: string) =>

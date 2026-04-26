@@ -42,6 +42,7 @@ import type {
 } from "@/types/project-env-var";
 import type {
   FrankenphpOctanePreflight,
+  FrankenphpOctaneWorkerHealth,
   FrankenphpOctaneWorkerSettings,
   UpdateFrankenphpOctaneWorkerSettingsInput,
 } from "@/types/frankenphp-octane";
@@ -636,6 +637,61 @@ function updateMockFrankenphpOctaneSettings(
   stored[projectId] = next;
   writeMockFrankenphpOctaneWorkers(stored);
   return next;
+}
+
+function buildMockFrankenphpOctaneHealth(projectId: string): FrankenphpOctaneWorkerHealth {
+  const project = getMockProjectOrThrow(projectId);
+  const settings = getMockFrankenphpOctaneSettings(projectId);
+  const runtime = readMockRuntimes().find((item) => item.runtimeType === "frankenphp" && item.isActive);
+  const runtimeLabel = runtime
+    ? `FrankenPHP ${runtime.version} (PHP ${runtime.phpFamily ?? mockRuntimePhpFamilyForItem(runtime)})`
+    : "FrankenPHP";
+  const extensionStates = runtime ? mockPhpExtensionsForRuntime(runtime.id, runtimeLabel) : [];
+  const selectedExtensions = ["redis", "mbstring", "pdo_mysql"].map((extensionName) => {
+    const state = extensionStates.find((item) => item.extensionName === extensionName);
+    return {
+      extensionName,
+      available: Boolean(state),
+      enabled: Boolean(state?.enabled),
+    };
+  });
+  const lastStartedAt = settings.lastStartedAt ?? null;
+  const uptimeSeconds =
+    lastStartedAt && settings.status === "running"
+      ? Math.max(0, Math.floor((Date.now() - new Date(lastStartedAt).getTime()) / 1000))
+      : null;
+  const logKey = mockFrankenphpOctaneLogKey(projectId);
+  const logs = readMockServiceLogs()[logKey] ?? [];
+
+  return {
+    projectId,
+    status: settings.status,
+    pid: settings.pid,
+    uptimeSeconds,
+    workerPort: settings.workerPort,
+    adminPort: settings.adminPort,
+    lastStartedAt,
+    lastRestartedAt: null,
+    lastError: settings.lastError,
+    requestCount: settings.status === "running" ? Math.max(1, logs.length * 12) : null,
+    metricsAvailable: settings.status === "running",
+    logTail: logs.slice(-80).join("\n"),
+    restartRecommended: project.name.toLowerCase().includes("restart"),
+    restartReason: project.name.toLowerCase().includes("restart")
+      ? "Browser mock detected a project metadata change after worker start."
+      : null,
+    runtime: runtime
+      ? {
+          runtimeId: runtime.id,
+          version: runtime.version,
+          phpFamily: runtime.phpFamily ?? mockRuntimePhpFamilyForItem(runtime),
+          path: runtime.path,
+          managedPhpConfigPath: `${MOCK_APP_DATA_ROOT}/runtime-config/frankenphp/php.ini`,
+          extensions: selectedExtensions,
+        }
+      : null,
+    generatedAt: new Date().toISOString(),
+  };
 }
 
 function defaultMockServices(): ServiceState[] {
@@ -5103,6 +5159,10 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const projectId = String(args?.projectId ?? "");
       getMockProjectOrThrow(projectId);
       return getMockFrankenphpOctaneSettings(projectId) as T;
+    }
+    case "get_project_frankenphp_worker_health": {
+      const projectId = String(args?.projectId ?? "");
+      return buildMockFrankenphpOctaneHealth(projectId) as T;
     }
     case "update_project_frankenphp_worker_settings": {
       const projectId = String(args?.projectId ?? "");

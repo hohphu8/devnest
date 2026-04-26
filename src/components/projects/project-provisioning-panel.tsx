@@ -99,6 +99,7 @@ export function ProjectProvisioningPanel({
   const [stoppingPersistentTunnel, setStoppingPersistentTunnel] = useState(false);
   const [persistentHealth, setPersistentHealth] = useState<PersistentTunnelHealthReport | null>(null);
   const [showRemovePersistentHostnameConfirm, setShowRemovePersistentHostnameConfirm] = useState(false);
+  const [bootLoading, setBootLoading] = useState(true);
   const pushToast = useToastStore((state) => state.push);
 
   async function guardPreflight(action: "provisionProject" | "publishPersistentDomain") {
@@ -199,13 +200,26 @@ export function ProjectProvisioningPanel({
   }
 
   useEffect(() => {
+    let cancelled = false;
+    setBootLoading(true);
     setPreview(undefined);
     setPreviewError(undefined);
     setHostsErrorCode(undefined);
-    void loadPreview();
-    void loadSslAuthorityStatus();
-    void loadTunnelState();
-    void loadPersistentTunnelState();
+
+    Promise.allSettled([
+      loadPreview(),
+      loadSslAuthorityStatus(),
+      loadTunnelState(),
+      loadPersistentTunnelState(),
+    ]).finally(() => {
+      if (!cancelled) {
+        setBootLoading(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [project.id, project.updatedAt]);
 
   useEffect(() => {
@@ -653,6 +667,20 @@ export function ProjectProvisioningPanel({
           message:
             "DevNest is removing this hostname from Cloudflare DNS and clearing the app-managed mapping for this project.",
         };
+
+  if (bootLoading) {
+    return (
+      <Card className="tab-loading-card">
+        <div aria-live="polite" className="tab-loading-content" role="status">
+          <span aria-hidden="true" className="loading-spinner" />
+          <div className="loading-scrim-copy">
+            <strong>Loading provisioning state</strong>
+            <span>DevNest is preparing config preview, SSL, hosts, and tunnel state for this project.</span>
+          </div>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card className="route-loading-shell">

@@ -56,6 +56,46 @@ pub struct FrankenphpOctaneWorkerSettings {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrankenphpRuntimeExtensionHealth {
+    pub extension_name: String,
+    pub available: bool,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrankenphpRuntimeHealth {
+    pub runtime_id: String,
+    pub version: String,
+    pub php_family: Option<String>,
+    pub path: String,
+    pub managed_php_config_path: Option<String>,
+    pub extensions: Vec<FrankenphpRuntimeExtensionHealth>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrankenphpOctaneWorkerHealth {
+    pub project_id: String,
+    pub status: FrankenphpOctaneWorkerStatus,
+    pub pid: Option<i64>,
+    pub uptime_seconds: Option<i64>,
+    pub worker_port: i64,
+    pub admin_port: i64,
+    pub last_started_at: Option<String>,
+    pub last_restarted_at: Option<String>,
+    pub last_error: Option<String>,
+    pub request_count: Option<i64>,
+    pub metrics_available: bool,
+    pub log_tail: String,
+    pub restart_recommended: bool,
+    pub restart_reason: Option<String>,
+    pub runtime: Option<FrankenphpRuntimeHealth>,
+    pub generated_at: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateFrankenphpOctaneWorkerSettingsInput {

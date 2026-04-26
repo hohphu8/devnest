@@ -19,11 +19,11 @@ use crate::commands::database::{
 };
 use crate::commands::diagnostics::{apply_diagnostic_fix, run_diagnostics};
 use crate::commands::frankenphp_octane::{
-    get_project_frankenphp_octane_preflight, get_project_frankenphp_worker_settings,
-    get_project_frankenphp_worker_status, read_project_frankenphp_worker_logs,
-    reload_project_frankenphp_worker, restart_project_frankenphp_worker,
-    start_project_frankenphp_worker, stop_project_frankenphp_worker,
-    update_project_frankenphp_worker_settings,
+    get_project_frankenphp_octane_preflight, get_project_frankenphp_worker_health,
+    get_project_frankenphp_worker_settings, get_project_frankenphp_worker_status,
+    read_project_frankenphp_worker_logs, reload_project_frankenphp_worker,
+    restart_project_frankenphp_worker, start_project_frankenphp_worker,
+    stop_project_frankenphp_worker, update_project_frankenphp_worker_settings,
 };
 use crate::commands::hosts::{apply_hosts_entry, remove_hosts_entry};
 use crate::commands::logs::{clear_service_logs, read_service_logs};
@@ -416,6 +416,7 @@ pub fn run() {
             update_project_frankenphp_worker_settings,
             get_project_frankenphp_octane_preflight,
             get_project_frankenphp_worker_status,
+            get_project_frankenphp_worker_health,
             start_project_frankenphp_worker,
             stop_project_frankenphp_worker,
             restart_project_frankenphp_worker,

@@ -48,12 +48,21 @@ Turn local stack problems into practical next steps instead of forcing raw logs 
 
 ### Rich features out of the box
 
-Managed config, hosts automation, SSL, phpMyAdmin, Mailpit, Redis, workers, scheduled tasks, and env visibility are already part of the shipped product.
+Managed config, hosts automation, SSL, phpMyAdmin, Mailpit, Redis, FrankenPHP, workers, scheduled tasks, and env visibility are already part of the shipped product.
 
-- Apache and Nginx config generation
+- Apache, Nginx, and FrankenPHP config generation
 - PHP CLI follows the active runtime
 - Project-owned workers and tasks
 - Env diff against the real `.env` on disk
+
+### FrankenPHP on Windows
+
+DevNest supports FrankenPHP as a managed Windows web server lane.
+
+- FrankenPHP Classic is available for PHP projects and remains the default.
+- Laravel projects can opt into Laravel Octane Worker mode after installing Octane with `composer require laravel/octane`.
+- Octane workers run behind DevNest's normal local domains and Cloudflare origin flow, so `*.test` and persistent domains keep working through the app-managed ingress.
+- DevNest tracks worker PID, uptime, worker/admin ports, logs, health, and restart behavior from the Project Runtime tab.
 
 ### Optimized recovery
 
@@ -88,7 +97,7 @@ DevNest fits how Windows PHP developers actually work day to day.
 - Switch between PHP versions and have CLI follow the active runtime
 - Install PHP versions directly from the interface
 - Manage PHP extensions and configuration visually
-- Control Apache, Nginx, MySQL, and logs from one workspace
+- Control Apache, Nginx, FrankenPHP, MySQL, and logs from one workspace
 
 ![Switch PHP](./src-webdocs/assets/images/SwitchPHP.png)
 
@@ -99,7 +108,7 @@ DevNest also includes UI and workflows for:
 - PHP tools and extensions
 - PHP configuration
 - Cloudflare tunnel connection and tunnel creation
-- Apache and Nginx configuration
+- Apache, Nginx, and FrankenPHP configuration
 - Runtime control, PID tracking, port checks, and logs
 - Per-project scheduled tasks
 - Per-project workers and background commands

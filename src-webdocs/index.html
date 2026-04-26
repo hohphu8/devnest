@@ -11,7 +11,7 @@
     <meta name="referrer" content="strict-origin-when-cross-origin" />
     <meta
       name="keywords"
-      content="DevNest, PHP development, Windows PHP workspace, Laravel local dev, WordPress local dev, local PHP stack, Tauri desktop app, PHP runtime manager, Laragon alternative, XAMPP alternative"
+      content="DevNest, PHP development, Windows PHP workspace, FrankenPHP Windows, Laravel Octane Windows, Laravel local dev, WordPress local dev, local PHP stack, Tauri desktop app, PHP runtime manager, Laragon alternative, XAMPP alternative"
     />
     <meta
       name="robots"
@@ -19,7 +19,7 @@
     />
     <meta
       name="description"
-      content="DevNest is a local PHP workspace for Windows with Smart Scan, runtime management, diagnostics, QR preview, Cloudflare sharing, recovery, and automation."
+      content="DevNest is a local PHP workspace for Windows with Smart Scan, Apache, Nginx, FrankenPHP, Laravel Octane Worker support, diagnostics, sharing, recovery, and automation."
     />
     <link rel="canonical" href="https://devnest.one/" />
     <meta property="og:type" content="website" />
@@ -29,7 +29,7 @@
     <meta property="og:title" content="DevNest | Local PHP Workspace for Windows" />
     <meta
       property="og:description"
-      content="Local PHP workspace for Windows with Smart Scan, runtime management, diagnostics, mobile preview, Cloudflare sharing, recovery, and automation."
+      content="Local PHP workspace for Windows with Smart Scan, Apache, Nginx, FrankenPHP, Laravel Octane Worker support, diagnostics, sharing, recovery, and automation."
     />
     <meta property="og:image" content="https://devnest.one/og-image.png" />
     <meta property="og:image:alt" content="DevNest dashboard preview" />
@@ -40,7 +40,7 @@
     <meta name="twitter:title" content="DevNest | Local PHP Workspace for Windows" />
     <meta
       name="twitter:description"
-      content="Local PHP workspace for Windows with Smart Scan, runtime management, diagnostics, sharing, recovery, and automation."
+      content="Local PHP workspace for Windows with Smart Scan, Apache, Nginx, FrankenPHP, Laravel Octane Worker support, diagnostics, sharing, recovery, and automation."
     />
     <meta name="twitter:image" content="https://devnest.one/og-image.png" />
     <meta name="twitter:image:alt" content="DevNest dashboard preview" />
@@ -58,8 +58,8 @@
         "image": "https://devnest.one/og-image.png",
         "operatingSystem": "Windows",
         "applicationCategory": "DeveloperApplication",
-        "softwareVersion": "0.1.4",
-        "description": "DevNest is a local PHP workspace for Windows with Smart Scan, runtime management, diagnostics, QR preview, Cloudflare sharing, recovery, and automation.",
+        "softwareVersion": "0.2.1",
+        "description": "DevNest is a local PHP workspace for Windows with Smart Scan, Apache, Nginx, FrankenPHP, Laravel Octane Worker support, diagnostics, sharing, recovery, and automation.",
         "offers": {
           "@type": "Offer",
           "price": "0",
@@ -106,7 +106,7 @@
             </span>
             <span>
               <span class="block text-base font-extrabold tracking-[-0.04em] text-white">DevNest</span>
-              <span class="block text-[11px] uppercase tracking-[0.22em] text-ink-400">v0.1.4</span>
+              <span class="block text-[11px] uppercase tracking-[0.22em] text-ink-400">v0.2.1</span>
             </span>
           </a>
 
@@ -137,7 +137,7 @@
             <div class="home-tag">HoHPhu</div>
             <h1 class="home-hero-title">Local PHP Workspace for Windows</h1>
             <p class="home-hero-copy-text">
-              DevNest helps Laravel, WordPress, and plain PHP projects on Windows with Smart Scan, managed runtimes, readable diagnostics, sharing, recovery, and automation.
+              DevNest helps Laravel, WordPress, and plain PHP projects on Windows with Smart Scan, Apache, Nginx, FrankenPHP, readable diagnostics, sharing, recovery, and automation.
             </p>
             <div class="home-actions">
               <a href="https://github.com/hohphu8/devnest/releases" class="button-primary">Get Started</a>
@@ -239,13 +239,26 @@
           <article class="feature-cell">
             <h3 class="feature-title">Rich features out of the box</h3>
             <p class="feature-copy">
-              Managed config, hosts automation, SSL, phpMyAdmin, Mailpit, Redis, workers, scheduled tasks, and env visibility.
+              Managed config, hosts automation, SSL, phpMyAdmin, Mailpit, Redis, FrankenPHP, workers, scheduled tasks, and env visibility.
             </p>
             <div class="mini-note-grid">
-              <div class="mini-note">Apache and Nginx config generation</div>
+              <div class="mini-note">Apache, Nginx, and FrankenPHP config generation</div>
               <div class="mini-note">PHP CLI follows active runtime</div>
               <div class="mini-note">Project-owned workers and tasks</div>
               <div class="mini-note">Env diff against real .env on disk</div>
+            </div>
+          </article>
+
+          <article class="feature-cell">
+            <h3 class="feature-title">FrankenPHP on Windows</h3>
+            <p class="feature-copy">
+              Use FrankenPHP as a managed Windows web server lane. Classic mode stays simple, while Laravel projects can opt into an Octane Worker behind the same local domain.
+            </p>
+            <div class="mini-note-grid">
+              <div class="mini-note">FrankenPHP Classic remains the default</div>
+              <div class="mini-note">Laravel Octane Worker mode is opt-in</div>
+              <div class="mini-note">Managed worker/admin ports and health</div>
+              <div class="mini-note">Local domains and Cloudflare origins stay project-first</div>
             </div>
           </article>
 
@@ -276,7 +289,7 @@
             </p>
             <div class="mini-note-grid">
               <div class="mini-note">Easy set local domain</div>
-              <div class="mini-note">Configure runtime by selecting a version</div>
+              <div class="mini-note">Configure runtime by selecting a version or embedded FrankenPHP PHP family</div>
               <div class="mini-note">Run diagnostics and get actionable insights</div>
               <div class="mini-note">Share project with team members</div>
             </div>
@@ -346,11 +359,11 @@
               <img src="./assets/images/CreateTunnel.png" alt="Create Cloudflare tunnel interface" class="w-full" />
             </figure>
             <figure class="feature-visual">
-              <div class="mini-note">Apache/NGINX configuration</div>
+              <div class="mini-note">Apache, Nginx, and FrankenPHP configuration</div>
               <img src="./assets/images/WebServerConfig.png" alt="Web server configuration interface" class="w-full" />
             </figure>
             <figure class="feature-visual">
-              <div class="mini-note">Live runtime control, PID tracking, port checks, logs,.. for the local PHP stack.</div>
+              <div class="mini-note">Live runtime control, PID tracking, port checks, logs, and FrankenPHP Octane worker health.</div>
               <img src="./assets/images/Services.png" alt="Live runtime control interface" class="w-full" />
             </figure>
             <figure class="feature-visual">
@@ -452,8 +465,8 @@
           <div class="sponsor-grid">
             <div class="sponsor-cell">Laravel apps</div>
             <div class="sponsor-cell"></div>
-            <div class="sponsor-cell">Apache / Nginx</div>
-            <div class="sponsor-cell"></div>
+            <div class="sponsor-cell">Apache / Nginx / FrankenPHP</div>
+            <div class="sponsor-cell">Laravel Octane Worker</div>
             <div class="sponsor-cell"></div>
             <div class="sponsor-cell">Cloudflare sharing</div>
             <div class="sponsor-cell"></div>
@@ -502,7 +515,7 @@
             <div class="footer-link-list">
               <a href="./privacy-policy.html" class="footer-link">Privacy Policy</a>
               <a href="./terms-of-use.html" class="footer-link">Terms of Use</a>
-              <span class="footer-link">Version 0.1.4</span>
+              <span class="footer-link">Version 0.2.1</span>
             </div>
           </div>
         </div>

@@ -1104,11 +1104,11 @@ function ProjectsRoute() {
       }
 
       await loadProjects();
-      openProject(importedProject.id);
+      openProject(importedProject.project.id);
       pushToast({
         tone: "success",
         title: "Project profile imported",
-        message: `${importedProject.name} is now tracked in DevNest.`,
+        message: `${importedProject.project.name} is now tracked in DevNest.`,
       });
     } catch (invokeError) {
       pushToast({
@@ -1127,11 +1127,15 @@ function ProjectsRoute() {
       }
 
       await loadProjects();
-      openProject(importedProject.id);
+      openProject(importedProject.project.id);
+      const warningSuffix =
+        importedProject.warnings.length > 0
+          ? ` ${importedProject.warnings.length} compatibility warning(s) need review.`
+          : "";
       pushToast({
-        tone: "success",
+        tone: importedProject.warnings.length > 0 ? "warning" : "success",
         title: "Team profile imported",
-        message: `${importedProject.name} is now tracked in DevNest from a shared project profile.`,
+        message: `${importedProject.project.name} is now tracked in DevNest from a shared project profile.${warningSuffix}`,
       });
     } catch (invokeError) {
       pushToast({

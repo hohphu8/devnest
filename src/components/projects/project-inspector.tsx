@@ -10,6 +10,7 @@ import { ProjectMobilePreviewModal } from "@/components/projects/project-mobile-
 import { ProjectProvisioningPanel } from "@/components/projects/project-provisioning-panel";
 import { diagnosticsApi } from "@/lib/api/diagnostics-api";
 import { projectProfileApi } from "@/lib/api/project-profile-api";
+import { frankenphpProductionExportApi } from "@/lib/api/frankenphp-production-export-api";
 import { reliabilityApi } from "@/lib/api/reliability-api";
 import { projectEnvApi } from "@/lib/api/project-env-api";
 import { projectApi } from "@/lib/api/project-api";
@@ -42,6 +43,7 @@ import type {
   FrankenphpOctaneWorkerSettings,
   UpdateFrankenphpOctaneWorkerSettingsInput,
 } from "@/types/frankenphp-octane";
+import type { FrankenphpProductionExportPreview } from "@/types/frankenphp-production-export";
 import { mobilePreviewApi } from "@/lib/api/mobile-preview-api";
 
 interface ProjectInspectorProps {
@@ -194,6 +196,12 @@ export function ProjectInspector({
   const [octaneError, setOctaneError] = useState<string>();
   const [octaneLoading, setOctaneLoading] = useState(false);
   const [octaneAction, setOctaneAction] = useState<"start" | "stop" | "restart" | "reload" | "save" | "refresh" | null>(null);
+  const [productionExportPreview, setProductionExportPreview] =
+    useState<FrankenphpProductionExportPreview | null>(null);
+  const [productionExportOpen, setProductionExportOpen] = useState(false);
+  const [productionExportLoading, setProductionExportLoading] = useState(false);
+  const [productionExportWriting, setProductionExportWriting] = useState(false);
+  const [productionExportError, setProductionExportError] = useState<string>();
   const [octaneDraft, setOctaneDraft] = useState({
     workerPort: 8100,
     adminPort: 9100,
@@ -246,6 +254,11 @@ export function ProjectInspector({
       setOctaneError(undefined);
       setOctaneLoading(false);
       setOctaneAction(null);
+      setProductionExportPreview(null);
+      setProductionExportOpen(false);
+      setProductionExportLoading(false);
+      setProductionExportWriting(false);
+      setProductionExportError(undefined);
       octaneAutoRestartKeyRef.current = null;
       return;
     }
@@ -264,6 +277,9 @@ export function ProjectInspector({
       frankenphpMode: project.frankenphpMode ?? "classic",
     });
     setMessage(undefined);
+    setProductionExportPreview(null);
+    setProductionExportOpen(false);
+    setProductionExportError(undefined);
   }, [project]);
 
   useEffect(() => {
@@ -816,9 +832,12 @@ export function ProjectInspector({
       }
 
       pushToast({
-        tone: "success",
+        tone: result.warnings.length > 0 ? "warning" : "success",
         title: "Team profile exported",
-        message: `${currentProject.name} was exported to ${result.path}.`,
+        message:
+          result.warnings.length > 0
+            ? `${currentProject.name} was exported to ${result.path} with ${result.warnings.length} warning(s).`
+            : `${currentProject.name} was exported to ${result.path}.`,
       });
     } catch (error) {
       pushToast({
@@ -829,6 +848,63 @@ export function ProjectInspector({
           "DevNest could not export this shared project profile.",
         ),
       });
+    }
+  }
+
+  async function handlePreviewProductionExport() {
+    if (currentProject.serverType !== "frankenphp") {
+      pushToast({
+        tone: "warning",
+        title: "Production export unavailable",
+        message: "Production export is scoped to FrankenPHP projects in this phase.",
+      });
+      return;
+    }
+
+    setProductionExportOpen(true);
+    setProductionExportLoading(true);
+    setProductionExportError(undefined);
+    try {
+      const preview = await frankenphpProductionExportApi.preview(currentProject.id);
+      setProductionExportPreview(preview);
+    } catch (error) {
+      const nextMessage = getAppErrorMessage(error, "Could not preview the production export.");
+      setProductionExportError(nextMessage);
+      pushToast({
+        tone: "error",
+        title: "Production export preview failed",
+        message: nextMessage,
+      });
+    } finally {
+      setProductionExportLoading(false);
+    }
+  }
+
+  async function handleWriteProductionExport() {
+    setProductionExportWriting(true);
+    setProductionExportError(undefined);
+    try {
+      const result = await frankenphpProductionExportApi.write(currentProject.id);
+      if (!result) {
+        return;
+      }
+
+      pushToast({
+        tone: result.warnings.length > 0 ? "warning" : "success",
+        title: "Production export written",
+        message: `${result.files.length} file(s) written to ${result.path}.`,
+      });
+      setProductionExportOpen(false);
+    } catch (error) {
+      const nextMessage = getAppErrorMessage(error, "Could not write the production export.");
+      setProductionExportError(nextMessage);
+      pushToast({
+        tone: "error",
+        title: "Production export failed",
+        message: nextMessage,
+      });
+    } finally {
+      setProductionExportWriting(false);
     }
   }
 
@@ -1512,6 +1588,9 @@ export function ProjectInspector({
             <Button onClick={() => void handleQuickAction("vscode")}>Open VS Code</Button>
             <Button onClick={() => setMobilePreviewOpen(true)}>Mobile Preview</Button>
             <Button onClick={() => void handleExportTeamProjectProfile()}>Export Team Profile</Button>
+            {project.serverType === "frankenphp" ? (
+              <Button onClick={() => void handlePreviewProductionExport()}>Production Export</Button>
+            ) : null}
             <Button onClick={() => void handleExportProjectProfile()}>Export Profile</Button>
           </div>
         </Card>
@@ -2677,6 +2756,101 @@ export function ProjectInspector({
                 onClick={() => void handleDelete()}
               >
                 Delete Project
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {productionExportOpen ? (
+        <div
+          data-nested-modal="true"
+          className="wizard-overlay"
+          onClick={() => {
+            if (!productionExportLoading && !productionExportWriting) {
+              setProductionExportOpen(false);
+            }
+          }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="confirm-dialog production-export-dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="confirm-dialog-copy">
+              <h3>FrankenPHP production export</h3>
+              <p>
+                Preview Linux starter files for <strong>{currentProject.name}</strong> before writing them to a folder.
+              </p>
+
+              {productionExportLoading ? (
+                <div className="tab-loading-content" role="status" aria-live="polite">
+                  <span aria-hidden="true" className="loading-spinner" />
+                  <div className="loading-scrim-copy">
+                    <strong>Generating preview</strong>
+                    <span>DevNest is building Caddy, systemd, Docker, and deployment notes.</span>
+                  </div>
+                </div>
+              ) : null}
+
+              {productionExportError ? <span className="error-text">{productionExportError}</span> : null}
+
+              {productionExportPreview ? (
+                <div className="stack">
+                  <div className="detail-grid">
+                    <div className="detail-item">
+                      <span className="detail-label">Export Slug</span>
+                      <strong className="mono detail-value">{productionExportPreview.slug}</strong>
+                    </div>
+                    <div className="detail-item">
+                      <span className="detail-label">Files</span>
+                      <strong>{productionExportPreview.files.length}</strong>
+                    </div>
+                  </div>
+
+                  <div className="detail-item">
+                    <span className="detail-label">Assumptions</span>
+                    <ul className="compact-list">
+                      {productionExportPreview.assumptions.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="detail-item">
+                    <span className="detail-label">Warnings</span>
+                    <ul className="compact-list">
+                      {productionExportPreview.warnings.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="stack">
+                    {productionExportPreview.files.map((file) => (
+                      <div className="detail-item" key={file.relativePath}>
+                        <span className="detail-label">
+                          {file.relativePath} · {file.kind}
+                        </span>
+                        <pre className="service-log-preview">{file.content}</pre>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <div className="confirm-dialog-actions">
+              <Button
+                disabled={productionExportLoading || productionExportWriting}
+                onClick={() => setProductionExportOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                busy={productionExportWriting}
+                busyLabel="Writing export..."
+                disabled={!productionExportPreview || productionExportLoading || productionExportWriting}
+                onClick={() => void handleWriteProductionExport()}
+              >
+                Write Files
               </Button>
             </div>
           </div>

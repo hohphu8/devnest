@@ -47,6 +47,10 @@ import type {
   UpdateFrankenphpOctaneWorkerSettingsInput,
 } from "@/types/frankenphp-octane";
 import type {
+  FrankenphpProductionExportPreview,
+  FrankenphpProductionExportWriteResult,
+} from "@/types/frankenphp-production-export";
+import type {
   ActionPreflightReport,
   ReliabilityInspectorSnapshot,
   ReliabilityTransferResult,
@@ -1854,6 +1858,81 @@ function writeMockLastExportedTeamProjectProfile(value: Record<string, unknown>)
   );
 }
 
+function mockProductionExportSlug(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "devnest-project"
+  );
+}
+
+function buildMockFrankenphpProductionExportPreview(projectId: string): FrankenphpProductionExportPreview {
+  const project = getMockProjectOrThrow(projectId);
+  if (project.serverType !== "frankenphp") {
+    throw {
+      code: "FRANKENPHP_PRODUCTION_EXPORT_UNSUPPORTED",
+      message: "Production export is currently available only for FrankenPHP projects.",
+    } satisfies AppError;
+  }
+
+  const settings =
+    project.frankenphpMode === "classic" ? null : getMockFrankenphpOctaneSettings(projectId);
+  const slug = mockProductionExportSlug(project.domain);
+  const documentRoot = project.documentRoot === "." ? `/var/www/${slug}` : `/var/www/${slug}/${project.documentRoot}`;
+  const warnings = [
+    "This is a Linux starter recipe. DevNest does not deploy remote servers, configure DNS/firewalls, issue production TLS certificates, or manage CI/CD.",
+    "Secrets and `.env` values are not exported.",
+  ];
+  const workerFile =
+    project.frankenphpMode === "octane"
+      ? "public/frankenphp-worker.php"
+      : project.frankenphpMode === "symfony"
+        ? "public/index.php"
+        : project.frankenphpMode === "custom"
+          ? settings?.customWorkerRelativePath || "worker.php"
+          : null;
+  const caddyfile =
+    project.frankenphpMode === "classic"
+      ? `{\n    auto_https off\n}\n\n:80 {\n    root * ${documentRoot}\n    php_server\n}\n`
+      : `{\n    auto_https off\n}\n\n:80 {\n    root * ${documentRoot}\n    php_server {\n        worker {\n            file ${workerFile}\n            num ${settings?.workers ?? 1}\n            max_requests ${settings?.maxRequests ?? 500}\n        }\n    }\n}\n`;
+  const envKeys = readMockProjectEnvVars()
+    .filter((item) => item.projectId === projectId)
+    .map((item) => item.envKey)
+    .sort();
+  const deployment = `# DevNest FrankenPHP Production Starter\n\nProject: ${project.name}\nMode: ${project.frankenphpMode}\nLinux root: /var/www/${slug}\n\n## Environment Keys\n\n${
+    envKeys.length > 0 ? envKeys.map((key) => `- ${key}`).join("\n") : "- No DevNest-tracked env keys were exported."
+  }\n\nDevNest does not export .env values or secrets.\n`;
+
+  return {
+    projectId,
+    projectName: project.name,
+    slug,
+    generatedAt: new Date().toISOString(),
+    assumptions: [
+      "Target host is Linux with FrankenPHP available as `/usr/local/bin/frankenphp`.",
+      "Project files will live under `/var/www/{project-slug}`.",
+      "Generated files are starter recipes and should be reviewed before production use.",
+    ],
+    warnings,
+    files: [
+      { relativePath: "Caddyfile", kind: "caddyfile", content: caddyfile },
+      {
+        relativePath: "devnest-frankenphp.service",
+        kind: "systemd",
+        content: `[Unit]\nDescription=DevNest FrankenPHP project ${slug}\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=/var/www/${slug}\nExecStart=/usr/local/bin/frankenphp run --config /etc/devnest/${slug}/Caddyfile\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n`,
+      },
+      {
+        relativePath: "Dockerfile",
+        kind: "dockerfile",
+        content: `FROM dunglas/frankenphp:php${project.phpVersion}\n\nWORKDIR /app\nCOPY . /app\nCOPY Caddyfile /etc/caddy/Caddyfile\nEXPOSE 80\nCMD [\"frankenphp\", \"run\", \"--config\", \"/etc/caddy/Caddyfile\"]\n`,
+      },
+      { relativePath: "DEPLOYMENT.md", kind: "markdown", content: deployment },
+    ],
+  };
+}
+
 function readMockProjectTunnels(): Record<string, ProjectTunnelState> {
   if (typeof window === "undefined") {
     return {};
@@ -3183,6 +3262,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       return ({
         success: true,
         path: `.mock-app-data/exports/${project.domain.replace(/\./g, "-")}.devnest-project.json`,
+        warnings: [],
       }) as T;
     }
     case "export_team_project_profile": {
@@ -3198,7 +3278,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const rootNameHint =
         pathSegments[pathSegments.length - 1] ?? project.name.toLowerCase();
       const profile = {
-        formatVersion: 1,
+        formatVersion: 2,
         profileKind: "team-share",
         exportedAt: timestamp,
         source: "DevNest",
@@ -3214,13 +3294,59 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
           databaseName: project.databaseName ?? null,
           databasePort: project.databasePort ?? null,
           frankenphpMode: project.frankenphpMode,
-          envVars,
+          envVars: [],
+          envKeys: envVars.map((item) => item.envKey),
+          frankenphp:
+            project.serverType === "frankenphp"
+              ? {
+                  mode: project.frankenphpMode,
+                  workerMode: project.frankenphpMode === "classic" ? null : project.frankenphpMode,
+                  workerPolicy:
+                    project.frankenphpMode === "classic"
+                      ? null
+                      : {
+                          workers: getMockFrankenphpOctaneSettings(project.id).workers,
+                          maxRequests: getMockFrankenphpOctaneSettings(project.id).maxRequests,
+                          preferredWorkerPort: getMockFrankenphpOctaneSettings(project.id).workerPort,
+                          preferredAdminPort: getMockFrankenphpOctaneSettings(project.id).adminPort,
+                          customWorkerRelativePath:
+                            getMockFrankenphpOctaneSettings(project.id).customWorkerRelativePath,
+                        },
+                  runtimeRequirements: {
+                    phpFamily: project.phpVersion,
+                    requiredExtensions: ["mbstring", "openssl", "pdo"],
+                  },
+                  localIntent: {
+                    domain: project.domain,
+                    sslEnabled: project.sslEnabled,
+                  },
+                  localDiagnostics:
+                    project.frankenphpMode === "classic"
+                      ? null
+                      : {
+                          currentWorkerPort: getMockFrankenphpOctaneSettings(project.id).workerPort,
+                          currentAdminPort: getMockFrankenphpOctaneSettings(project.id).adminPort,
+                          workerLogPath: getMockFrankenphpOctaneSettings(project.id).logPath,
+                        },
+                }
+              : null,
         },
       };
       writeMockLastExportedTeamProjectProfile(profile);
       return ({
         success: true,
         path: `.mock-app-data/exports/${project.domain.replace(/\./g, "-")}.devnest-team-project.json`,
+        warnings:
+          envVars.length > 0
+            ? [
+                {
+                  code: "TEAM_PROFILE_ENV_VALUES_OMITTED",
+                  title: "Environment values were not exported",
+                  message: "Team profiles include env key names only.",
+                  suggestion: "Share secret values through your team's secret manager.",
+                },
+              ]
+            : [],
       }) as T;
     }
     case "import_project_profile": {
@@ -3295,7 +3421,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         writeMockProjectEnvVars([...currentEnvVars, ...importedEnvVars]);
       }
 
-      return created as T;
+      return { project: created, warnings: [] } as T;
     }
     case "import_team_project_profile": {
       const profile = readMockLastExportedTeamProjectProfile();
@@ -3320,6 +3446,16 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         databasePort?: number | null;
         frankenphpMode?: Project["frankenphpMode"];
         envVars?: Array<{ envKey: string; envValue: string }>;
+        envKeys?: string[];
+        frankenphp?: {
+          workerPolicy?: {
+            workers?: number;
+            maxRequests?: number;
+            preferredWorkerPort?: number;
+            preferredAdminPort?: number;
+            customWorkerRelativePath?: string | null;
+          } | null;
+        } | null;
       };
       const nextPath = `${MOCK_SHARED_ROOT}/${projectProfile.rootNameHint}`;
 
@@ -3371,7 +3507,32 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         writeMockProjectEnvVars([...currentEnvVars, ...importedEnvVars]);
       }
 
-      return created as T;
+      const warnings =
+        projectProfile.serverType === "frankenphp"
+          ? [
+              {
+                code: "FRANKENPHP_PORTS_PORTABLE_WARNING",
+                title: "Worker ports are local preferences",
+                message:
+                  "The shared profile may include source-machine worker/admin ports for diagnostics only.",
+                suggestion: "Check the Runtime tab after import if ports conflict locally.",
+              },
+            ]
+          : [];
+
+      return { project: created, warnings } as T;
+    }
+    case "preview_frankenphp_production_export": {
+      return buildMockFrankenphpProductionExportPreview(String(args?.projectId ?? "")) as T;
+    }
+    case "write_frankenphp_production_export": {
+      const preview = buildMockFrankenphpProductionExportPreview(String(args?.projectId ?? ""));
+      return {
+        success: true,
+        path: `${MOCK_APP_DATA_ROOT}/production-exports/${preview.slug}`,
+        warnings: preview.warnings,
+        files: preview.files.map((file) => `${MOCK_APP_DATA_ROOT}/production-exports/${preview.slug}/${file.relativePath}`),
+      } satisfies FrankenphpProductionExportWriteResult as T;
     }
     case "list_project_env_vars": {
       const projectId = String(args?.projectId ?? "");

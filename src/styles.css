@@ -2809,6 +2809,34 @@ a {
   width: min(720px, calc(100vw - 64px));
 }
 
+.production-export-dialog {
+  width: min(860px, calc(100vw - 64px));
+  max-height: calc(100vh - 72px);
+  overflow: auto;
+}
+
+.compact-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.service-log-preview {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(171, 195, 231, 0.12);
+  background: rgba(0, 0, 0, 0.26);
+  color: var(--text-primary);
+  font: 12px/1.55 var(--font-mono);
+  white-space: pre-wrap;
+}
+
 .database-snapshot-header {
   display: flex;
   gap: 16px;

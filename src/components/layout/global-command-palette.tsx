@@ -245,17 +245,17 @@ export function GlobalCommandPalette() {
         actionKey: "palette:import-project-profile",
         busyLabel: "Importing project profile...",
         perform: async () => {
-          const project = await projectProfileApi.importProject();
-          if (!project) {
+          const result = await projectProfileApi.importProject();
+          if (!result) {
             return;
           }
 
           await refreshOverview();
-          navigate(`/projects?projectId=${project.id}`);
+          navigate(`/projects?projectId=${result.project.id}`);
           pushToast({
             tone: "success",
             title: "Profile imported",
-            message: `${project.name} was imported into the local project registry.`,
+            message: `${result.project.name} was imported into the local project registry.`,
           });
         },
       },
@@ -268,17 +268,20 @@ export function GlobalCommandPalette() {
         actionKey: "palette:import-team-project",
         busyLabel: "Importing team project...",
         perform: async () => {
-          const project = await projectProfileApi.importTeamProject();
-          if (!project) {
+          const result = await projectProfileApi.importTeamProject();
+          if (!result) {
             return;
           }
 
           await refreshOverview();
-          navigate(`/projects?projectId=${project.id}`);
+          navigate(`/projects?projectId=${result.project.id}`);
           pushToast({
-            tone: "success",
+            tone: result.warnings.length > 0 ? "warning" : "success",
             title: "Team project imported",
-            message: `${project.name} is now tracked on this machine.`,
+            message:
+              result.warnings.length > 0
+                ? `${result.project.name} is now tracked with ${result.warnings.length} compatibility warning(s).`
+                : `${result.project.name} is now tracked on this machine.`,
           });
         },
       },

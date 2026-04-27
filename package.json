@@ -1,7 +1,7 @@
 {
   "name": "devnest",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "scripts": {
     "check:env": "powershell -ExecutionPolicy Bypass -File scripts/check-windows-devnest-prereqs.ps1",

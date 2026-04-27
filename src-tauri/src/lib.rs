@@ -26,6 +26,9 @@ use crate::commands::frankenphp_octane::{
     start_project_frankenphp_worker, stop_project_frankenphp_worker,
     update_project_frankenphp_worker_settings,
 };
+use crate::commands::frankenphp_production_export::{
+    preview_frankenphp_production_export, write_frankenphp_production_export,
+};
 use crate::commands::hosts::{apply_hosts_entry, remove_hosts_entry};
 use crate::commands::logs::{clear_service_logs, read_service_logs};
 use crate::commands::mobile_preview::{
@@ -419,6 +422,8 @@ pub fn run() {
             get_project_frankenphp_worker_preflight,
             get_project_frankenphp_worker_status,
             get_project_frankenphp_worker_health,
+            preview_frankenphp_production_export,
+            write_frankenphp_production_export,
             start_project_frankenphp_worker,
             stop_project_frankenphp_worker,
             restart_project_frankenphp_worker,

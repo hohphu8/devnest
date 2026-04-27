@@ -1054,84 +1054,106 @@ pub fn prepare_auto_resume_project_scheduled_tasks(
     Ok(())
 }
 
+fn run_scheduler_tick(connection: &Connection, state: &AppState) -> Result<(), AppError> {
+    for task in ProjectScheduledTaskRepository::list_all(connection)?
+        .into_iter()
+        .filter(|task| task.enabled && task.next_run_at.is_some())
+    {
+        let Ok(current) = sync_task_status(connection, state, task) else {
+            continue;
+        };
+        let Some(next_run_at) = current.next_run_at.as_deref() else {
+            continue;
+        };
+        let Ok(next_run_at) = parse_iso_utc(next_run_at) else {
+            continue;
+        };
+        if next_run_at > Utc::now() {
+            continue;
+        }
+
+        let advanced_next = match compute_next_run_at_from(&current, next_run_at) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!(
+                    "DevNest could not compute the next run for scheduled task {}: {}",
+                    current.name, error
+                );
+                let _ = ProjectScheduledTaskRepository::update_runtime_state(
+                    connection,
+                    &current.id,
+                    &ProjectScheduledTaskStatus::Error,
+                    current.next_run_at.as_deref(),
+                    current.last_run_at.as_deref(),
+                    current.last_success_at.as_deref(),
+                    Some(error.message.as_str()),
+                    Some(current.enabled),
+                );
+                continue;
+            }
+        };
+        if is_task_running(state, &current.id).unwrap_or(false) {
+            let _ = write_skipped_run(connection, state, &current, advanced_next);
+            continue;
+        }
+
+        let _ = dispatch_task_run(connection, state, current, advanced_next);
+    }
+
+    Ok(())
+}
+
 pub fn run_scheduler_loop(
     db_path: PathBuf,
     workspace_dir: PathBuf,
     active_runs: Arc<Mutex<HashMap<String, ManagedScheduledTaskRun>>>,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
 ) {
+    let state = AppState {
+        db_path: db_path.clone(),
+        workspace_dir,
+        resources_dir: PathBuf::new(),
+        started_at: String::new(),
+        allow_exit: Mutex::new(false),
+        managed_processes: Mutex::new(HashMap::new()),
+        managed_worker_processes: Mutex::new(HashMap::new()),
+        managed_scheduled_task_runs: Arc::clone(&active_runs),
+        scheduled_task_scheduler_shutdown: Arc::clone(&shutdown),
+        runtime_install_task: Mutex::new(None),
+        optional_tool_install_task: Mutex::new(None),
+        project_tunnels: Mutex::new(HashMap::new()),
+        project_persistent_tunnels: Mutex::new(HashMap::new()),
+        project_mobile_previews: Mutex::new(HashMap::new()),
+    };
+    let mut connection = match Connection::open(&db_path) {
+        Ok(connection) => Some(connection),
+        Err(error) => {
+            eprintln!(
+                "DevNest scheduled task scheduler could not open the database: {}",
+                error
+            );
+            None
+        }
+    };
+
     while !shutdown.load(Ordering::Relaxed) {
-        match Connection::open(&db_path) {
-            Ok(connection) => {
-                let state = AppState {
-                    db_path: db_path.clone(),
-                    workspace_dir: workspace_dir.clone(),
-                    resources_dir: PathBuf::new(),
-                    started_at: String::new(),
-                    allow_exit: Mutex::new(false),
-                    managed_processes: Mutex::new(HashMap::new()),
-                    managed_worker_processes: Mutex::new(HashMap::new()),
-                    managed_scheduled_task_runs: Arc::clone(&active_runs),
-                    scheduled_task_scheduler_shutdown: Arc::clone(&shutdown),
-                    runtime_install_task: Mutex::new(None),
-                    optional_tool_install_task: Mutex::new(None),
-                    project_tunnels: Mutex::new(HashMap::new()),
-                    project_persistent_tunnels: Mutex::new(HashMap::new()),
-                    project_mobile_previews: Mutex::new(HashMap::new()),
-                };
-
-                if let Ok(tasks) = ProjectScheduledTaskRepository::list_all(&connection) {
-                    for task in tasks
-                        .into_iter()
-                        .filter(|task| task.enabled && task.next_run_at.is_some())
-                    {
-                        let Ok(current) = sync_task_status(&connection, &state, task) else {
-                            continue;
-                        };
-                        let Some(next_run_at) = current.next_run_at.as_deref() else {
-                            continue;
-                        };
-                        let Ok(next_run_at) = parse_iso_utc(next_run_at) else {
-                            continue;
-                        };
-                        if next_run_at > Utc::now() {
-                            continue;
-                        }
-
-                        let advanced_next = match compute_next_run_at_from(&current, next_run_at) {
-                            Ok(value) => value,
-                            Err(error) => {
-                                eprintln!(
-                                    "DevNest could not compute the next run for scheduled task {}: {}",
-                                    current.name, error
-                                );
-                                let _ = ProjectScheduledTaskRepository::update_runtime_state(
-                                    &connection,
-                                    &current.id,
-                                    &ProjectScheduledTaskStatus::Error,
-                                    current.next_run_at.as_deref(),
-                                    current.last_run_at.as_deref(),
-                                    current.last_success_at.as_deref(),
-                                    Some(error.message.as_str()),
-                                    Some(current.enabled),
-                                );
-                                continue;
-                            }
-                        };
-                        if is_task_running(&state, &current.id).unwrap_or(false) {
-                            let _ = write_skipped_run(&connection, &state, &current, advanced_next);
-                            continue;
-                        }
-
-                        let _ = dispatch_task_run(&connection, &state, current, advanced_next);
-                    }
+        if connection.is_none() {
+            connection = match Connection::open(&db_path) {
+                Ok(connection) => Some(connection),
+                Err(error) => {
+                    eprintln!(
+                        "DevNest scheduled task scheduler could not reconnect to the database: {}",
+                        error
+                    );
+                    None
                 }
-            }
-            Err(error) => {
-                eprintln!(
-                    "DevNest scheduled task scheduler could not open the database: {}",
-                    error
-                );
+            };
+        }
+
+        if let Some(active_connection) = connection.as_ref() {
+            if let Err(error) = run_scheduler_tick(active_connection, &state) {
+                eprintln!("DevNest scheduled task scheduler cycle failed: {}", error);
+                connection = None;
             }
         }
 

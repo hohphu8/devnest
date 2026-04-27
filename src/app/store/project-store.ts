@@ -149,5 +149,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       "Deleting project...",
     );
   },
-  selectProject: (selectedProjectId) => set({ selectedProjectId }),
+  selectProject: (selectedProjectId) =>
+    set((state) => ({
+      selectedProjectId,
+      activeProject: selectedProjectId
+        ? state.projects.find((project) => project.id === selectedProjectId)
+        : undefined,
+    })),
 }));

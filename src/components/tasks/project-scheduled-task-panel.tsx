@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useProjectScheduledTaskStore } from "@/app/store/project-scheduled-task-store";
 import { useProjectStore } from "@/app/store/project-store";
 import { useToastStore } from "@/app/store/toast-store";
+import { useWorkspaceStore } from "@/app/store/workspace-store";
 import { ActionMenu, ActionMenuItem } from "@/components/ui/action-menu";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -188,6 +189,7 @@ export function ProjectScheduledTaskPanel({
 }: ProjectScheduledTaskPanelProps) {
   const navigate = useNavigate();
   const pushToast = useToastStore((state) => state.push);
+  const workspaceLoaded = useWorkspaceStore((state) => state.loaded);
   const projects = useProjectStore((state) => state.projects);
   const {
     actionTaskId,
@@ -221,6 +223,11 @@ export function ProjectScheduledTaskPanel({
   }, [project?.id, project?.path]);
 
   useEffect(() => {
+    if (workspaceLoaded) {
+      setLoadingTasks(false);
+      return;
+    }
+
     let cancelled = false;
     setLoadingTasks(true);
 
@@ -238,7 +245,7 @@ export function ProjectScheduledTaskPanel({
     return () => {
       cancelled = true;
     };
-  }, [loadProjectTasks, loadTasks, mode, project]);
+  }, [loadProjectTasks, loadTasks, mode, project, workspaceLoaded]);
 
   const visibleTasks = useMemo(
     () =>

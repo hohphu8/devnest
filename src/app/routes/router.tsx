@@ -1418,12 +1418,12 @@ function ServicesRoute() {
   }, [selectedServiceName, selectService, services]);
 
   useEffect(() => {
-    if (!selectedServiceName) {
+    if (!selectedServiceName || activeService?.name === selectedServiceName) {
       return;
     }
 
     void fetchService(selectedServiceName);
-  }, [fetchService, selectedServiceName]);
+  }, [activeService?.name, fetchService, selectedServiceName]);
 
   useEffect(() => {
     if (!activeService?.port) {
@@ -1757,6 +1757,7 @@ function TasksRoute() {
 function LogsRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
   const pushToast = useToastStore((state) => state.push);
+  const workspaceLoaded = useWorkspaceStore((state) => state.loaded);
   const services = useServiceStore((state) => state.services);
   const workers = useProjectWorkerStore((state) => state.workers);
   const loadWorkers = useProjectWorkerStore((state) => state.loadWorkers);
@@ -1792,16 +1793,16 @@ function LogsRoute() {
   const selectedRun = selectedTaskRuns.find((run) => run.id === selectedRunId);
 
   useEffect(() => {
-    if (workers.length === 0) {
+    if (!workspaceLoaded && workers.length === 0) {
       void loadWorkers().catch(() => undefined);
     }
-  }, [loadWorkers, workers.length]);
+  }, [loadWorkers, workers.length, workspaceLoaded]);
 
   useEffect(() => {
-    if (scheduledTasks.length === 0) {
+    if (!workspaceLoaded && scheduledTasks.length === 0) {
       void loadScheduledTasks().catch(() => undefined);
     }
-  }, [loadScheduledTasks, scheduledTasks.length]);
+  }, [loadScheduledTasks, scheduledTasks.length, workspaceLoaded]);
 
   useEffect(() => {
     if (selectedType === "worker" && selectedWorkerId) {

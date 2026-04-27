@@ -118,6 +118,7 @@ use crate::models::service::{ServiceName, ServiceStatus};
 use crate::state::{AppState, MobilePreviewSession};
 use crate::storage::db::init_database;
 use crate::storage::repositories::ProjectRepository;
+use crate::utils::perf;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::net::TcpStream;
@@ -125,7 +126,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Manager, RunEvent, WindowEvent};
 
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -202,6 +203,80 @@ fn auto_resume_boot_scheduled_tasks(connection: &Connection) {
     }
 }
 
+fn start_scheduled_task_scheduler(state: &AppState) {
+    let scheduled_task_db_path = state.db_path.clone();
+    let scheduled_task_workspace_dir = state.workspace_dir.clone();
+    let scheduled_task_active_runs = Arc::clone(&state.managed_scheduled_task_runs);
+    let scheduled_task_shutdown = Arc::clone(&state.scheduled_task_scheduler_shutdown);
+    let _ = thread::Builder::new()
+        .name("devnest-scheduled-tasks".to_string())
+        .spawn(move || {
+            scheduled_task_manager::run_scheduler_loop(
+                scheduled_task_db_path,
+                scheduled_task_workspace_dir,
+                scheduled_task_active_runs,
+                scheduled_task_shutdown,
+            );
+        });
+}
+
+fn start_database_time_machine_scheduler(state: &AppState) {
+    let scheduler_db_path = state.db_path.clone();
+    let scheduler_workspace_dir = state.workspace_dir.clone();
+    let _ = thread::Builder::new()
+        .name("devnest-db-time-machine".to_string())
+        .spawn(move || {
+            loop {
+                if let Err(error) = run_scheduled_database_snapshot_cycle(
+                    &scheduler_db_path,
+                    &scheduler_workspace_dir,
+                ) {
+                    eprintln!("DevNest scheduled Time Machine cycle failed: {}", error);
+                }
+                thread::sleep(Duration::from_secs(60));
+            }
+        });
+}
+
+fn start_background_boot_tasks<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
+    let _ = thread::Builder::new()
+        .name("devnest-boot-background".to_string())
+        .spawn(move || {
+            let started_at = Instant::now();
+            let state = app_handle.state::<AppState>();
+            let connection = match Connection::open(&state.db_path) {
+                Ok(connection) => connection,
+                Err(error) => {
+                    eprintln!(
+                        "DevNest background boot could not open the database: {}",
+                        error
+                    );
+                    start_scheduled_task_scheduler(&state);
+                    return;
+                }
+            };
+
+            let phase_started_at = Instant::now();
+            auto_start_boot_services(&connection, &state);
+            perf::log_elapsed("boot background services", phase_started_at);
+
+            let phase_started_at = Instant::now();
+            auto_start_boot_workers(&connection, &state);
+            perf::log_elapsed("boot background workers", phase_started_at);
+
+            let phase_started_at = Instant::now();
+            auto_start_boot_octane_workers(&connection, &state);
+            perf::log_elapsed("boot background frankenphp workers", phase_started_at);
+
+            let phase_started_at = Instant::now();
+            auto_resume_boot_scheduled_tasks(&connection);
+            perf::log_elapsed("boot background scheduled task resume", phase_started_at);
+
+            start_scheduled_task_scheduler(&state);
+            perf::log_elapsed("boot background total", started_at);
+        });
+}
+
 fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
         return;
@@ -262,18 +337,25 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            let setup_started_at = Instant::now();
             let workspace_dir = app.path().app_data_dir()?;
             let resources_dir = app.path().resource_dir()?;
             let db_path = workspace_dir.join("devnest.sqlite3");
 
+            let phase_started_at = Instant::now();
             init_database(&db_path)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
+            perf::log_elapsed("boot database init", phase_started_at);
+            let phase_started_at = Instant::now();
             let connection = Connection::open(&db_path)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
             runtime_registry::sync_runtime_versions(&connection, &workspace_dir, &resources_dir)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
+            perf::log_elapsed("boot runtime registry sync", phase_started_at);
+            let phase_started_at = Instant::now();
             php_cli_environment::sync_active_php_cli_environment(&connection, &workspace_dir)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
+            perf::log_elapsed("boot php cli sync", phase_started_at);
 
             let state = AppState {
                 db_path,
@@ -292,41 +374,11 @@ pub fn run() {
                 project_mobile_previews: Mutex::new(HashMap::new()),
             };
 
-            auto_start_boot_services(&connection, &state);
-            auto_start_boot_workers(&connection, &state);
-            auto_start_boot_octane_workers(&connection, &state);
-            auto_resume_boot_scheduled_tasks(&connection);
-            let scheduled_task_db_path = state.db_path.clone();
-            let scheduled_task_workspace_dir = state.workspace_dir.clone();
-            let scheduled_task_active_runs = Arc::clone(&state.managed_scheduled_task_runs);
-            let scheduled_task_shutdown = Arc::clone(&state.scheduled_task_scheduler_shutdown);
-            let _ = thread::Builder::new()
-                .name("devnest-scheduled-tasks".to_string())
-                .spawn(move || {
-                    scheduled_task_manager::run_scheduler_loop(
-                        scheduled_task_db_path,
-                        scheduled_task_workspace_dir,
-                        scheduled_task_active_runs,
-                        scheduled_task_shutdown,
-                    );
-                });
-            let scheduler_db_path = state.db_path.clone();
-            let scheduler_workspace_dir = state.workspace_dir.clone();
-            let _ = thread::Builder::new()
-                .name("devnest-db-time-machine".to_string())
-                .spawn(move || {
-                    loop {
-                        if let Err(error) = run_scheduled_database_snapshot_cycle(
-                            &scheduler_db_path,
-                            &scheduler_workspace_dir,
-                        ) {
-                            eprintln!("DevNest scheduled Time Machine cycle failed: {}", error);
-                        }
-                        thread::sleep(Duration::from_secs(60));
-                    }
-                });
+            start_database_time_machine_scheduler(&state);
             app.manage(state);
             tray::initialize(app)?;
+            start_background_boot_tasks(app.handle().clone());
+            perf::log_elapsed("boot setup blocking", setup_started_at);
 
             Ok(())
         })

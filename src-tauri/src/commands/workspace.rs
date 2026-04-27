@@ -4,8 +4,10 @@ use crate::models::service::ServiceStatus;
 use crate::models::workspace::{WorkspaceOverviewPayload, WorkspacePortStatus};
 use crate::state::{AppState, BootState};
 use crate::storage::repositories::ProjectRepository;
+use crate::utils::perf;
 use rusqlite::Connection;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
 fn connection_from_state(state: &AppState) -> Result<Connection, AppError> {
     Ok(Connection::open(&state.db_path)?)
@@ -15,11 +17,20 @@ fn connection_from_state(state: &AppState) -> Result<Connection, AppError> {
 pub fn get_workspace_overview(
     state: tauri::State<'_, AppState>,
 ) -> Result<WorkspaceOverviewPayload, AppError> {
+    let started_at = Instant::now();
     let connection = connection_from_state(&state)?;
+    let phase_started_at = Instant::now();
     let projects = ProjectRepository::list(&connection)?;
+    perf::log_elapsed("workspace overview projects", phase_started_at);
+    let phase_started_at = Instant::now();
     let services = service_manager::get_all_service_status(&connection, &state)?;
+    perf::log_elapsed("workspace overview services", phase_started_at);
+    let phase_started_at = Instant::now();
     let workers = worker_manager::list_all_workers(&connection, &state)?;
+    perf::log_elapsed("workspace overview workers", phase_started_at);
+    let phase_started_at = Instant::now();
     let scheduled_tasks = scheduled_task_manager::list_all_scheduled_tasks(&connection, &state)?;
+    perf::log_elapsed("workspace overview scheduled tasks", phase_started_at);
 
     let mut expected_services_by_port = BTreeMap::<u16, Vec<_>>::new();
     for service in &services {
@@ -43,7 +54,9 @@ pub fn get_workspace_overview(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
+    let phase_started_at = Instant::now();
     let port_checks = ports::check_ports(&known_ports)?;
+    perf::log_elapsed("workspace overview ports", phase_started_at);
 
     let port_summary = port_checks
         .into_iter()
@@ -71,7 +84,7 @@ pub fn get_workspace_overview(
         })
         .collect();
 
-    Ok(WorkspaceOverviewPayload {
+    let payload = WorkspaceOverviewPayload {
         boot_state: BootState {
             app_name: "DevNest".to_string(),
             environment: "tauri".to_string(),
@@ -83,5 +96,8 @@ pub fn get_workspace_overview(
         workers,
         scheduled_tasks,
         port_summary,
-    })
+    };
+    perf::log_elapsed("workspace overview total", started_at);
+
+    Ok(payload)
 }

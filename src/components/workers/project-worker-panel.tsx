@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useProjectStore } from "@/app/store/project-store";
 import { useProjectWorkerStore } from "@/app/store/project-worker-store";
 import { useToastStore } from "@/app/store/toast-store";
+import { useWorkspaceStore } from "@/app/store/workspace-store";
 import { ActionMenu, ActionMenuItem } from "@/components/ui/action-menu";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -92,6 +93,7 @@ function labelForPreset(presetType: ProjectWorkerPresetType) {
 export function ProjectWorkerPanel({ mode, project }: ProjectWorkerPanelProps) {
   const navigate = useNavigate();
   const pushToast = useToastStore((state) => state.push);
+  const workspaceLoaded = useWorkspaceStore((state) => state.loaded);
   const projects = useProjectStore((state) => state.projects);
   const {
     actionWorkerId,
@@ -118,6 +120,11 @@ export function ProjectWorkerPanel({ mode, project }: ProjectWorkerPanelProps) {
   }, [project?.id, project?.path]);
 
   useEffect(() => {
+    if (workspaceLoaded) {
+      setLoadingWorkers(false);
+      return;
+    }
+
     let cancelled = false;
     setLoadingWorkers(true);
 
@@ -137,7 +144,7 @@ export function ProjectWorkerPanel({ mode, project }: ProjectWorkerPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [loadProjectWorkers, loadWorkers, mode, project]);
+  }, [loadProjectWorkers, loadWorkers, mode, project, workspaceLoaded]);
 
   const visibleWorkers = useMemo(
     () =>

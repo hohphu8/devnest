@@ -555,7 +555,7 @@ pub fn remove_managed_config(
 mod tests {
     use super::{
         PHPMYADMIN_DOMAIN, generate_config, generate_config_with_aliases,
-        generate_phpmyadmin_config, preview_config, preview_config_with_frankenphp_worker_port,
+        generate_phpmyadmin_config, preview_config_with_frankenphp_worker_port,
         remove_managed_config,
     };
     use crate::models::project::{

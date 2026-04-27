@@ -66,7 +66,7 @@ fn refresh_project_server_aliases(
     } else {
         let _ = service_manager::start_service(connection, state, service)?;
     }
-    if matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+    if !matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
         let _ = frankenphp_octane_manager::start(connection, state, &project.id)?;
     }
 

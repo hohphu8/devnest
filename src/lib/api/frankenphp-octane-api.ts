@@ -18,6 +18,10 @@ export const frankenphpOctaneApi = {
       input,
     }),
   preflight: (projectId: string) =>
+    tauriInvoke<FrankenphpOctanePreflight>("get_project_frankenphp_worker_preflight", {
+      projectId,
+    }),
+  octanePreflight: (projectId: string) =>
     tauriInvoke<FrankenphpOctanePreflight>("get_project_frankenphp_octane_preflight", {
       projectId,
     }),

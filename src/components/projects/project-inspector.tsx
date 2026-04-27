@@ -40,6 +40,7 @@ import type {
   FrankenphpOctanePreflight,
   FrankenphpOctaneWorkerHealth,
   FrankenphpOctaneWorkerSettings,
+  UpdateFrankenphpOctaneWorkerSettingsInput,
 } from "@/types/frankenphp-octane";
 import { mobilePreviewApi } from "@/lib/api/mobile-preview-api";
 
@@ -198,6 +199,7 @@ export function ProjectInspector({
     adminPort: 9100,
     workers: 1,
     maxRequests: 500,
+    customWorkerRelativePath: "",
   });
   const diagnosticsByProject = useDiagnosticsStore((state) => state.itemsByProject);
   const diagnosticsError = useDiagnosticsStore((state) => state.error);
@@ -441,6 +443,7 @@ export function ProjectInspector({
             adminPort: settingsResult.value.adminPort,
             workers: settingsResult.value.workers,
             maxRequests: settingsResult.value.maxRequests,
+            customWorkerRelativePath: settingsResult.value.customWorkerRelativePath ?? "",
           });
         } else {
           setOctaneSettings(null);
@@ -475,7 +478,7 @@ export function ProjectInspector({
       !project ||
       activeTab !== "runtime" ||
       project.serverType !== "frankenphp" ||
-      project.frankenphpMode !== "octane" ||
+      project.frankenphpMode === "classic" ||
       !octaneHealth?.restartRecommended ||
       octaneSettings?.status !== "running" ||
       octaneLoading ||
@@ -512,7 +515,7 @@ export function ProjectInspector({
       !project ||
       activeTab !== "runtime" ||
       project.serverType !== "frankenphp" ||
-      project.frankenphpMode !== "octane" ||
+      project.frankenphpMode === "classic" ||
       octaneSettings?.status !== "running"
     ) {
       return;
@@ -649,10 +652,18 @@ export function ProjectInspector({
   const liveStatus = getLiveProjectStatus(currentProject, services);
   const runtimeRunning = runtimeService?.status === "running";
   const octaneBusy = octaneLoading || octaneAction !== null;
+  const workerModeLabel =
+    currentProject.frankenphpMode === "octane"
+      ? "Laravel Octane Worker"
+      : currentProject.frankenphpMode === "symfony"
+        ? "Symfony Worker"
+        : currentProject.frankenphpMode === "custom"
+          ? "Custom Worker"
+          : "Classic";
   const runtimeTabBootLoading =
     activeTab === "runtime" &&
     currentProject.serverType === "frankenphp" &&
-    currentProject.frankenphpMode === "octane" &&
+    currentProject.frankenphpMode !== "classic" &&
     octaneLoading &&
     !octaneSettings &&
     !octaneHealth &&
@@ -660,17 +671,17 @@ export function ProjectInspector({
   const octaneBusyCopy =
     octaneAction === "save"
       ? {
-          title: "Saving Octane settings",
+          title: "Saving worker settings",
           message: "DevNest is updating the managed worker profile.",
         }
       : octaneAction === "refresh"
         ? {
-            title: "Refreshing Octane state",
+            title: "Refreshing worker state",
             message: "DevNest is reading worker status, health, preflight checks, and logs.",
           }
         : octaneAction === "start"
           ? {
-              title: "Starting Octane worker",
+              title: `Starting ${workerModeLabel}`,
               message: "DevNest is preparing the FrankenPHP ingress and project worker.",
             }
           : octaneAction === "stop"
@@ -681,19 +692,19 @@ export function ProjectInspector({
             : octaneAction === "restart"
               ? {
                   title: octaneHealth?.restartRecommended
-                    ? "Auto restarting Octane"
-                    : "Restarting Octane worker",
+                    ? `Auto restarting ${workerModeLabel}`
+                    : `Restarting ${workerModeLabel}`,
                   message: octaneHealth?.restartRecommended
-                    ? "Project files changed, so DevNest is restarting the Laravel Octane worker."
-                    : "DevNest is cycling the Laravel Octane worker.",
+                    ? "Project files changed, so DevNest is restarting the worker."
+                    : "DevNest is cycling the worker.",
                 }
               : octaneAction === "reload"
                 ? {
-                    title: "Reloading Octane worker",
+                    title: `Reloading ${workerModeLabel}`,
                     message: "DevNest is sending the managed reload action.",
                   }
                 : {
-                    title: "Loading Octane runtime",
+                    title: "Loading worker runtime",
                     message: "DevNest is reading worker status, health, preflight checks, and logs.",
                   };
   const diagnosticsLoading = loadingProjectId === currentProject.id;
@@ -889,6 +900,14 @@ export function ProjectInspector({
       setMessage("Laravel Octane Worker mode is only available for Laravel projects using FrankenPHP.");
       return;
     }
+    if (nextFrankenphpMode === "symfony" && (nextServerType !== "frankenphp" || nextFramework !== "symfony")) {
+      setMessage("Symfony Worker mode is only available for Symfony projects using FrankenPHP.");
+      return;
+    }
+    if (nextFrankenphpMode === "custom" && nextServerType !== "frankenphp") {
+      setMessage("Custom Worker mode is only available for FrankenPHP projects.");
+      return;
+    }
 
     try {
       await onUpdate(currentProject.id, draft);
@@ -931,7 +950,7 @@ export function ProjectInspector({
   async function handleRuntimeToggle() {
     try {
       const isOctaneRuntime =
-        currentProject.serverType === "frankenphp" && currentProject.frankenphpMode === "octane";
+        currentProject.serverType === "frankenphp" && currentProject.frankenphpMode !== "classic";
       if (runtimeRunning) {
         await stopService(currentProject.serverType);
         if (isOctaneRuntime) {
@@ -1008,6 +1027,7 @@ export function ProjectInspector({
         adminPort: settings.adminPort,
         workers: settings.workers,
         maxRequests: settings.maxRequests,
+        customWorkerRelativePath: settings.customWorkerRelativePath ?? "",
       });
     } catch (error) {
       setOctaneError(getAppErrorMessage(error, "Could not refresh Octane worker state."));
@@ -1016,29 +1036,72 @@ export function ProjectInspector({
     }
   }
 
+  function buildOctaneSettingsInput(): UpdateFrankenphpOctaneWorkerSettingsInput {
+    return {
+      ...octaneDraft,
+      mode:
+        currentProject.frankenphpMode === "symfony" || currentProject.frankenphpMode === "custom"
+          ? currentProject.frankenphpMode
+          : "octane",
+      customWorkerRelativePath:
+        currentProject.frankenphpMode === "custom"
+          ? octaneDraft.customWorkerRelativePath.trim() || null
+          : null,
+    };
+  }
+
+  function hasUnsavedOctaneSettings() {
+    if (!octaneSettings) {
+      return true;
+    }
+
+    const input = buildOctaneSettingsInput();
+    return (
+      input.workerPort !== octaneSettings.workerPort ||
+      input.adminPort !== octaneSettings.adminPort ||
+      input.workers !== octaneSettings.workers ||
+      input.maxRequests !== octaneSettings.maxRequests ||
+      input.mode !== octaneSettings.mode ||
+      (input.customWorkerRelativePath ?? "") !== (octaneSettings.customWorkerRelativePath ?? "")
+    );
+  }
+
+  async function persistOctaneSettings(showToast: boolean) {
+    const settings = await frankenphpOctaneApi.updateSettings(
+      currentProject.id,
+      buildOctaneSettingsInput(),
+    );
+    setOctaneSettings(settings);
+    setOctaneDraft({
+      workerPort: settings.workerPort,
+      adminPort: settings.adminPort,
+      workers: settings.workers,
+      maxRequests: settings.maxRequests,
+      customWorkerRelativePath: settings.customWorkerRelativePath ?? "",
+    });
+    setOctanePreflight(await frankenphpOctaneApi.preflight(currentProject.id));
+    setOctaneHealth(await frankenphpOctaneApi.health(currentProject.id));
+
+    if (showToast) {
+      pushToast({
+        tone: "success",
+        title: "Worker settings saved",
+        message: "Worker ports, request limits, and worker file were updated.",
+      });
+    }
+
+    return settings;
+  }
+
   async function handleOctaneSettingsSave() {
     setOctaneAction("save");
     setOctaneError(undefined);
     try {
-      const settings = await frankenphpOctaneApi.updateSettings(currentProject.id, octaneDraft);
-      setOctaneSettings(settings);
-      setOctaneDraft({
-        workerPort: settings.workerPort,
-        adminPort: settings.adminPort,
-        workers: settings.workers,
-        maxRequests: settings.maxRequests,
-      });
-      setOctanePreflight(await frankenphpOctaneApi.preflight(currentProject.id));
-      setOctaneHealth(await frankenphpOctaneApi.health(currentProject.id));
-      pushToast({
-        tone: "success",
-        title: "Octane settings saved",
-        message: "Worker ports and request limits were updated.",
-      });
+      await persistOctaneSettings(true);
     } catch (error) {
-      const message = getAppErrorMessage(error, "Could not save Octane worker settings.");
+      const message = getAppErrorMessage(error, "Could not save worker settings.");
       setOctaneError(message);
-      pushToast({ tone: "error", title: "Octane settings failed", message });
+      pushToast({ tone: "error", title: "Worker settings failed", message });
     } finally {
       setOctaneAction(null);
     }
@@ -1051,6 +1114,10 @@ export function ProjectInspector({
     setOctaneAction(action);
     setOctaneError(undefined);
     try {
+      if ((action === "start" || action === "restart") && hasUnsavedOctaneSettings()) {
+        await persistOctaneSettings(false);
+      }
+
       const settings =
         action === "start"
           ? await frankenphpOctaneApi.start(currentProject.id)
@@ -1066,16 +1133,16 @@ export function ProjectInspector({
       setOctaneHealth(await frankenphpOctaneApi.health(currentProject.id));
       pushToast({
         tone: action === "stop" ? "info" : "success",
-        title: source === "auto" ? "Octane auto restarted" : `Octane ${action}`,
+        title: source === "auto" ? `${workerModeLabel} auto restarted` : `${workerModeLabel} ${action}`,
         message:
           source === "auto"
-            ? "Project files changed, so DevNest restarted the Laravel Octane worker."
-            : `Laravel Octane worker ${action === "reload" ? "reload signal sent" : `${action}ed`}.`,
+            ? "Project files changed, so DevNest restarted the worker."
+            : `${workerModeLabel} ${action === "reload" ? "reload signal sent" : `${action}ed`}.`,
       });
     } catch (error) {
-      const message = getAppErrorMessage(error, `Could not ${action} the Octane worker.`);
+      const message = getAppErrorMessage(error, `Could not ${action} the worker.`);
       setOctaneError(message);
-      pushToast({ tone: "error", title: `Octane ${action} failed`, message });
+      pushToast({ tone: "error", title: `${workerModeLabel} ${action} failed`, message });
     } finally {
       setOctaneAction(null);
     }
@@ -1589,22 +1656,17 @@ export function ProjectInspector({
               <div className="page-header">
                 <div>
                   <h2>FrankenPHP Mode</h2>
-                  <p>Classic keeps the embedded PHP server path. Laravel Octane runs a per-project worker behind the same local domain.</p>
+                  <p>Classic keeps the embedded PHP server path. Worker modes run a per-project app server behind the same local domain.</p>
                 </div>
-                <span className="status-chip" data-tone={currentProject.frankenphpMode === "octane" ? "success" : "warning"}>
-                  {currentProject.frankenphpMode === "octane" ? "Laravel Octane Worker" : "Classic"}
+                <span className="status-chip" data-tone={currentProject.frankenphpMode !== "classic" ? "success" : "warning"}>
+                  {workerModeLabel}
                 </span>
               </div>
 
-              {currentProject.framework !== "laravel" ? (
+              {currentProject.frankenphpMode === "classic" ? (
                 <div className="inline-note-card" data-tone="warning">
-                  <strong>Octane unavailable</strong>
-                  <span>Worker mode is Laravel-only in this phase. Non-Laravel FrankenPHP projects stay on Classic.</span>
-                </div>
-              ) : currentProject.frankenphpMode !== "octane" ? (
-                <div className="inline-note-card">
                   <strong>Classic mode active</strong>
-                  <span>Switch to Laravel Octane Worker in Project Settings when this app has Octane installed and is ready for long-running workers.</span>
+                  <span>Switch to a framework-aware Worker mode in Project Settings when this app is ready for long-running requests.</span>
                 </div>
               ) : (
                 <div className="stack" style={{ gap: 16 }}>
@@ -1734,6 +1796,21 @@ export function ProjectInspector({
                     </div>
                   </div>
 
+                  {currentProject.frankenphpMode === "custom" ? (
+                    <div className="field">
+                      <label htmlFor="custom-worker-relative-path">Custom Worker File</label>
+                      <input
+                        className="input"
+                        disabled={octaneBusy}
+                        id="custom-worker-relative-path"
+                        onChange={(event) => setOctaneDraft((current) => ({ ...current, customWorkerRelativePath: event.target.value }))}
+                        placeholder="public/worker.php"
+                        value={octaneDraft.customWorkerRelativePath}
+                      />
+                      <span className="helper-text">Store a project-relative .php path only. DevNest blocks absolute and outside-project paths during preflight.</span>
+                    </div>
+                  ) : null}
+
                   <div className="page-toolbar" style={{ justifyContent: "flex-start" }}>
                     <Button
                       busy={octaneAction === "save"}
@@ -1823,7 +1900,7 @@ export function ProjectInspector({
                 </div>
               )}
 
-              {octaneBusy && currentProject.frankenphpMode === "octane" ? (
+              {octaneBusy && currentProject.frankenphpMode !== "classic" ? (
                 <div aria-live="polite" className="loading-scrim" role="status">
                   <div className="loading-scrim-card">
                     <span aria-hidden="true" className="loading-spinner" />
@@ -2317,7 +2394,7 @@ export function ProjectInspector({
                         ...current,
                         serverType,
                         frankenphpMode:
-                          serverType === "frankenphp" && (current.framework ?? project.framework) === "laravel"
+                          serverType === "frankenphp"
                             ? current.frankenphpMode
                             : "classic",
                         phpVersion:
@@ -2367,7 +2444,7 @@ export function ProjectInspector({
                       framework: event.target.value as UpdateProjectPatch["framework"],
                       frankenphpMode:
                         (current.serverType ?? project.serverType) === "frankenphp" &&
-                        event.target.value === "laravel"
+                        ["laravel", "symfony"].includes(event.target.value)
                           ? current.frankenphpMode
                           : "classic",
                     }))
@@ -2375,6 +2452,7 @@ export function ProjectInspector({
                   value={draft.framework ?? project.framework}
                 >
                   <option value="laravel">Laravel</option>
+                  <option value="symfony">Symfony</option>
                   <option value="wordpress">WordPress</option>
                   <option value="php">PHP</option>
                   <option value="unknown">Unknown</option>
@@ -2416,6 +2494,12 @@ export function ProjectInspector({
                     <option value="classic">Classic</option>
                     <option disabled={draftFramework !== "laravel"} value="octane">
                       Laravel Octane Worker
+                    </option>
+                    <option disabled={draftFramework !== "symfony"} value="symfony">
+                      Symfony Worker
+                    </option>
+                    <option value="custom">
+                      Custom PHP Worker
                     </option>
                   </select>
 
@@ -2478,7 +2562,9 @@ export function ProjectInspector({
             <span className="helper-text">
               {draftFramework === "laravel"
                 ? "Octane mode runs a per-project Laravel worker behind the same FrankenPHP local domain."
-                : "Octane mode is disabled because this project is not marked as Laravel."}
+                : draftFramework === "symfony"
+                  ? "Symfony Worker runs public/index.php as a FrankenPHP worker behind the same local domain."
+                  : "Custom Worker is available for advanced FrankenPHP projects with an explicit worker file."}
             </span>
 
             {draftServerType === "frankenphp" ? (

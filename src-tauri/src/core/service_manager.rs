@@ -342,15 +342,16 @@ pub(crate) fn sync_managed_configs_for_service(
     for project in ProjectRepository::list(connection)? {
         if project_matches_server_type(&project, &server_type) {
             let aliases = public_host_aliases_for_project(connection, state, &project.id)?;
-            let octane_worker_port = if matches!(
+            let worker_port = if !matches!(
                 project.frankenphp_mode,
-                crate::models::project::FrankenphpMode::Octane
+                crate::models::project::FrankenphpMode::Classic
             ) {
                 Some(
-                    FrankenphpOctaneWorkerRepository::get_or_create(
+                    FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
                         connection,
                         &state.workspace_dir,
                         &project.id,
+                        project.frankenphp_mode.clone(),
                     )?
                     .worker_port,
                 )
@@ -361,7 +362,7 @@ pub(crate) fn sync_managed_configs_for_service(
                 &project,
                 &state.workspace_dir,
                 &aliases,
-                octane_worker_port,
+                worker_port,
             )?;
         }
     }

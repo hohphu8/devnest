@@ -116,8 +116,8 @@ pub fn update_project(
     }
 
     let updated = ProjectRepository::update(&connection, &project_id, patch)?;
-    if matches!(current.frankenphp_mode, FrankenphpMode::Octane)
-        && !matches!(updated.frankenphp_mode, FrankenphpMode::Octane)
+    if !matches!(current.frankenphp_mode, FrankenphpMode::Classic)
+        && current.frankenphp_mode.as_str() != updated.frankenphp_mode.as_str()
     {
         let _ = frankenphp_octane_manager::stop(&connection, &state, &project_id);
     }
@@ -126,12 +126,13 @@ pub fn update_project(
     if updated.domain != current.domain {
         remove_project_managed_configs(&state.workspace_dir, &updated.domain)?;
     }
-    let octane_worker_port = if matches!(updated.frankenphp_mode, FrankenphpMode::Octane) {
+    let worker_port = if !matches!(updated.frankenphp_mode, FrankenphpMode::Classic) {
         Some(
-            FrankenphpOctaneWorkerRepository::get_or_create(
+            FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
                 &connection,
                 &state.workspace_dir,
                 &updated.id,
+                updated.frankenphp_mode.clone(),
             )?
             .worker_port,
         )
@@ -142,7 +143,7 @@ pub fn update_project(
         &updated,
         &state.workspace_dir,
         &[],
-        octane_worker_port,
+        worker_port,
     )?;
     if persistent_route_context_changed {
         persistent_tunnels::reset_project_persistent_tunnel_after_profile_change(

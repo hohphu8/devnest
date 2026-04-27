@@ -928,7 +928,7 @@ function DashboardRoute() {
 function ProjectsRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
-  const [frameworkFilter, setFrameworkFilter] = useState<"all" | "laravel" | "wordpress" | "php" | "unknown">("all");
+  const [frameworkFilter, setFrameworkFilter] = useState<"all" | "laravel" | "symfony" | "wordpress" | "php" | "unknown">("all");
   const [serverFilter, setServerFilter] = useState<"all" | "apache" | "nginx" | "frankenphp">("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "running" | "stopped" | "error">("all");
   const [sortBy, setSortBy] = useState<"updated-desc" | "name-asc" | "domain-asc">("updated-desc");
@@ -1253,6 +1253,7 @@ function ProjectsRoute() {
             <select className="select" onChange={(event) => setFrameworkFilter(event.target.value as typeof frameworkFilter)} value={frameworkFilter}>
               <option value="all">All frameworks</option>
               <option value="laravel">Laravel</option>
+              <option value="symfony">Symfony</option>
               <option value="wordpress">WordPress</option>
               <option value="php">PHP</option>
               <option value="unknown">Unknown</option>

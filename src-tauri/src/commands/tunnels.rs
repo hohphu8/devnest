@@ -90,7 +90,7 @@ fn ensure_project_origin_service(
     if !matches!(service_state.status, ServiceStatus::Running) {
         let _ = service_manager::start_service(connection, state, service)?;
     }
-    if matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+    if !matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
         let _ = frankenphp_octane_manager::start(connection, state, &project.id)?;
     }
 

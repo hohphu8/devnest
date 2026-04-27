@@ -56,8 +56,29 @@ fn status_message(project_name: &str, exit_status: &ExitStatus) -> Option<String
         .unwrap_or_else(|| "an unknown exit status".to_string());
 
     Some(format!(
-        "{project_name} Octane worker stopped unexpectedly with {detail}."
+        "{project_name} FrankenPHP worker stopped unexpectedly with {detail}."
     ))
+}
+
+fn mode_label(mode: &FrankenphpMode) -> &'static str {
+    match mode {
+        FrankenphpMode::Classic => "Classic",
+        FrankenphpMode::Octane => "Laravel Octane",
+        FrankenphpMode::Symfony => "Symfony Worker",
+        FrankenphpMode::Custom => "Custom Worker",
+    }
+}
+
+fn active_worker_mode(project: &Project) -> FrankenphpMode {
+    if matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
+        match project.framework {
+            FrameworkType::Symfony => FrankenphpMode::Symfony,
+            FrameworkType::Laravel => FrankenphpMode::Octane,
+            _ => FrankenphpMode::Custom,
+        }
+    } else {
+        project.frankenphp_mode.clone()
+    }
 }
 
 fn check(
@@ -76,6 +97,15 @@ fn check(
         suggestion,
         blocking,
     }
+}
+
+fn preflight_blocking_message(preflight: &FrankenphpOctanePreflight) -> String {
+    preflight
+        .checks
+        .iter()
+        .find(|check| check.blocking)
+        .map(|check| format!("{}: {}", check.title, check.message))
+        .unwrap_or_else(|| preflight.summary.clone())
 }
 
 fn composer_has_octane(project_path: &Path) -> bool {
@@ -105,6 +135,115 @@ fn composer_has_octane(project_path: &Path) -> bool {
         .join("laravel")
         .join("octane")
         .exists()
+}
+
+fn composer_has_package(project_path: &Path, package_name: &str) -> bool {
+    for file_name in ["composer.lock", "composer.json"] {
+        let path = project_path.join(file_name);
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+
+        if content.contains(package_name) {
+            return true;
+        }
+
+        if let Ok(value) = serde_json::from_str::<Value>(&content) {
+            let pointer = package_name.replace('/', "~1");
+            if value
+                .pointer(&format!("/require/{pointer}"))
+                .or_else(|| value.pointer(&format!("/require-dev/{pointer}")))
+                .is_some()
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn symfony_runtime_ready(project_path: &Path) -> bool {
+    symfony_native_frankenphp_runtime_ready(project_path)
+        || symfony_legacy_frankenphp_runtime_ready(project_path)
+}
+
+fn symfony_legacy_frankenphp_runtime_ready(project_path: &Path) -> bool {
+    composer_has_package(project_path, "runtime/frankenphp-symfony")
+}
+
+fn symfony_native_frankenphp_runtime_ready(project_path: &Path) -> bool {
+    composer_has_package(project_path, "symfony/runtime")
+        && project_path
+            .join("vendor")
+            .join("symfony")
+            .join("runtime")
+            .join("Runner")
+            .join("FrankenPhpWorkerRunner.php")
+            .exists()
+}
+
+fn symfony_worker_runtime_env(project_path: &Path) -> Option<&'static str> {
+    if symfony_legacy_frankenphp_runtime_ready(project_path) {
+        Some("Runtime\\\\FrankenPhpSymfony\\\\Runtime")
+    } else {
+        None
+    }
+}
+
+fn custom_worker_path(
+    project: &Project,
+    settings: &FrankenphpOctaneWorkerSettings,
+) -> Result<PathBuf, AppError> {
+    let relative = settings
+        .custom_worker_relative_path
+        .as_deref()
+        .ok_or_else(|| {
+            AppError::new_validation(
+                "CUSTOM_WORKER_PATH_REQUIRED",
+                "Choose a project-relative PHP worker file before starting Custom Worker mode.",
+            )
+        })?;
+    if Path::new(relative).is_absolute() {
+        return Err(AppError::new_validation(
+            "CUSTOM_WORKER_PATH_ABSOLUTE",
+            "Custom worker files must be saved as project-relative paths.",
+        ));
+    }
+    let project_path = Path::new(&project.path);
+    let worker_path = project_path.join(relative);
+    let canonical_project = project_path.canonicalize().map_err(|error| {
+        AppError::with_details(
+            "INVALID_PROJECT_PATH",
+            "Could not resolve the project path.",
+            error.to_string(),
+        )
+    })?;
+    let canonical_worker = worker_path.canonicalize().map_err(|error| {
+        AppError::with_details(
+            "CUSTOM_WORKER_PATH_INVALID",
+            "The selected custom worker file does not exist.",
+            error.to_string(),
+        )
+    })?;
+    if !canonical_worker.starts_with(&canonical_project) {
+        return Err(AppError::new_validation(
+            "CUSTOM_WORKER_PATH_OUTSIDE_PROJECT",
+            "Custom worker files must stay inside the project directory.",
+        ));
+    }
+    if canonical_worker
+        .extension()
+        .and_then(|value| value.to_str())
+        != Some("php")
+    {
+        return Err(AppError::new_validation(
+            "CUSTOM_WORKER_PATH_INVALID",
+            "Custom worker files must use the .php extension.",
+        ));
+    }
+
+    Ok(canonical_worker)
 }
 
 fn octane_stub_dir(project_path: &Path) -> PathBuf {
@@ -217,27 +356,49 @@ fn restart_recommendation(
     };
 
     let project_path = Path::new(&project.path);
-    for (label, path) in [
-        (".env", project_path.join(".env")),
-        ("Composer metadata", project_path.join("composer.json")),
-        ("Composer lock", project_path.join("composer.lock")),
-        (
-            "Laravel bootstrap",
-            project_path.join("bootstrap").join("app.php"),
-        ),
-        ("Laravel application code", project_path.join("app")),
-        ("Laravel routes", project_path.join("routes")),
-        ("Laravel config", project_path.join("config")),
-        ("Laravel database code", project_path.join("database")),
-        (
-            "Laravel Blade views",
-            project_path.join("resources").join("views"),
-        ),
-    ] {
+    let paths = match settings.mode {
+        FrankenphpMode::Octane => vec![
+            (".env", project_path.join(".env")),
+            ("Composer metadata", project_path.join("composer.json")),
+            ("Composer lock", project_path.join("composer.lock")),
+            (
+                "Laravel bootstrap",
+                project_path.join("bootstrap").join("app.php"),
+            ),
+            ("Laravel application code", project_path.join("app")),
+            ("Laravel routes", project_path.join("routes")),
+            ("Laravel config", project_path.join("config")),
+            ("Laravel database code", project_path.join("database")),
+            (
+                "Laravel Blade views",
+                project_path.join("resources").join("views"),
+            ),
+        ],
+        FrankenphpMode::Symfony => vec![
+            (".env", project_path.join(".env")),
+            ("Composer metadata", project_path.join("composer.json")),
+            ("Composer lock", project_path.join("composer.lock")),
+            ("Symfony config", project_path.join("config")),
+            ("Symfony source", project_path.join("src")),
+            (
+                "Symfony front controller",
+                project_path.join("public").join("index.php"),
+            ),
+            ("Symfony templates", project_path.join("templates")),
+        ],
+        FrankenphpMode::Custom | FrankenphpMode::Classic => vec![
+            (".env", project_path.join(".env")),
+            ("Composer metadata", project_path.join("composer.json")),
+            ("Project source", project_path.join("src")),
+            ("Public entrypoint", resolve_project_public_path(project)),
+        ],
+    };
+
+    for (label, path) in paths {
         if path_modified_after(&path, started_at) {
             return (
                 true,
-                Some(format!("{label} changed after this Octane worker started.")),
+                Some(format!("{label} changed after this worker started.")),
             );
         }
     }
@@ -439,22 +600,35 @@ fn ensure_frankenphp_worker_file(project: &Project) -> Result<PathBuf, AppError>
     Ok(public_path)
 }
 
-fn validate_project_is_octane_target(
+fn validate_project_is_worker_target(
     connection: &Connection,
     project_id: &str,
-) -> Result<crate::models::project::Project, AppError> {
+) -> Result<Project, AppError> {
     let project = ProjectRepository::get(connection, project_id)?;
     if !matches!(project.server_type, ServerType::Frankenphp) {
         return Err(AppError::new_validation(
             "FRANKENPHP_WORKER_UNAVAILABLE",
-            "Laravel Octane Worker mode is only available for FrankenPHP projects.",
+            "FrankenPHP Worker mode is only available for FrankenPHP projects.",
         ));
     }
-    if !matches!(project.framework, FrameworkType::Laravel) {
-        return Err(AppError::new_validation(
-            "FRANKENPHP_WORKER_UNAVAILABLE",
-            "Laravel Octane Worker mode is only available for Laravel projects.",
-        ));
+
+    match project.frankenphp_mode {
+        FrankenphpMode::Classic => {}
+        FrankenphpMode::Octane if matches!(project.framework, FrameworkType::Laravel) => {}
+        FrankenphpMode::Symfony if matches!(project.framework, FrameworkType::Symfony) => {}
+        FrankenphpMode::Custom => {}
+        FrankenphpMode::Octane => {
+            return Err(AppError::new_validation(
+                "FRANKENPHP_WORKER_UNAVAILABLE",
+                "Laravel Octane Worker mode is only available for Laravel projects.",
+            ));
+        }
+        FrankenphpMode::Symfony => {
+            return Err(AppError::new_validation(
+                "FRANKENPHP_WORKER_UNAVAILABLE",
+                "Symfony Worker mode is only available for Symfony projects.",
+            ));
+        }
     }
 
     Ok(project)
@@ -669,13 +843,331 @@ fn detect_running_worker_on_ports(
     Ok(None)
 }
 
+fn push_common_worker_checks(
+    connection: &Connection,
+    state: &AppState,
+    project: &Project,
+    settings: &FrankenphpOctaneWorkerSettings,
+    checks: &mut Vec<FrankenphpOctanePreflightCheck>,
+) -> Result<(), AppError> {
+    let server_ready = matches!(project.server_type, ServerType::Frankenphp);
+    checks.push(check(
+        "SERVER_TYPE",
+        if server_ready {
+            FrankenphpOctanePreflightLevel::Ok
+        } else {
+            FrankenphpOctanePreflightLevel::Error
+        },
+        "FrankenPHP runtime lane",
+        if server_ready {
+            "Project is configured for FrankenPHP."
+        } else {
+            "Worker mode must stay behind the FrankenPHP ingress."
+        },
+        if server_ready {
+            None
+        } else {
+            Some("Change the project server to FrankenPHP before enabling worker mode.".to_string())
+        },
+        !server_ready,
+    ));
+
+    let runtime =
+        RuntimeVersionRepository::find_active_by_type(connection, &RuntimeType::Frankenphp)?;
+    if let Some(runtime) = runtime.as_ref() {
+        let family_result =
+            runtime_registry::frankenphp_embedded_php_family(Path::new(&runtime.path));
+        match family_result {
+            Ok(family) => {
+                let expected = runtime_registry::runtime_version_family(&project.php_version);
+                let matches_family = family == expected;
+                checks.push(check(
+                    "FRANKENPHP_RUNTIME",
+                    if matches_family {
+                        FrankenphpOctanePreflightLevel::Ok
+                    } else {
+                        FrankenphpOctanePreflightLevel::Error
+                    },
+                    "Active FrankenPHP runtime",
+                    format!("Active FrankenPHP embeds PHP {}.", family),
+                    if matches_family {
+                        None
+                    } else {
+                        Some(format!(
+                            "Use a FrankenPHP runtime embedding PHP {expected}, or change this project's selected PHP family."
+                        ))
+                    },
+                    !matches_family,
+                ));
+            }
+            Err(error) => checks.push(check(
+                "FRANKENPHP_RUNTIME",
+                FrankenphpOctanePreflightLevel::Error,
+                "Active FrankenPHP runtime",
+                error.message,
+                Some("Link or activate a working FrankenPHP binary in Settings.".to_string()),
+                true,
+            )),
+        }
+    } else {
+        checks.push(check(
+            "FRANKENPHP_RUNTIME",
+            FrankenphpOctanePreflightLevel::Error,
+            "Active FrankenPHP runtime",
+            "No active FrankenPHP runtime is linked.",
+            Some("Link or activate FrankenPHP in Settings before starting the worker.".to_string()),
+            true,
+        ));
+    }
+
+    let current_worker_pid = settings.pid.map(|pid| pid as u32);
+    for (code, title, port) in [
+        ("WORKER_PORT", "Worker port", settings.worker_port),
+        ("ADMIN_PORT", "Admin port", settings.admin_port),
+    ] {
+        match ports::check_port(port as u16) {
+            Ok(result) if !result.available && result.pid == current_worker_pid => {
+                checks.push(check(
+                    code,
+                    FrankenphpOctanePreflightLevel::Ok,
+                    title,
+                    format!("Port {port} is already held by this project's running worker."),
+                    None,
+                    false,
+                ))
+            }
+            Ok(result) => checks.push(check(
+                code,
+                if result.available {
+                    FrankenphpOctanePreflightLevel::Ok
+                } else {
+                    FrankenphpOctanePreflightLevel::Error
+                },
+                title,
+                if result.available {
+                    format!("Port {port} is available.")
+                } else {
+                    format!(
+                        "Port {port} is already used by {}.",
+                        result
+                            .process_name
+                            .unwrap_or_else(|| "another process".to_string())
+                    )
+                },
+                if result.available {
+                    None
+                } else {
+                    Some("Choose another managed port in the worker settings.".to_string())
+                },
+                !result.available,
+            )),
+            Err(error) => checks.push(check(
+                code,
+                FrankenphpOctanePreflightLevel::Warning,
+                title,
+                error.message,
+                Some("DevNest could not verify this port before start.".to_string()),
+                false,
+            )),
+        }
+    }
+
+    if let Some(runtime) = runtime.as_ref() {
+        match frankenphp_runtime_has_php_module(connection, state, runtime, "mbstring")? {
+            Some(true) => checks.push(check(
+                "FRANKENPHP_PHP_MBSTRING",
+                FrankenphpOctanePreflightLevel::Ok,
+                "Managed PHP mbstring",
+                "Through DevNest's managed PHP configuration.",
+                None,
+                false,
+            )),
+            Some(false) => checks.push(check(
+                "FRANKENPHP_PHP_MBSTRING",
+                FrankenphpOctanePreflightLevel::Warning,
+                "Managed PHP mbstring",
+                "The active FrankenPHP PHP runtime is not loading mbstring.",
+                Some("Enable mbstring for the active FrankenPHP runtime if this app requires it.".to_string()),
+                false,
+            )),
+            None => checks.push(check(
+                "FRANKENPHP_PHP_MBSTRING",
+                FrankenphpOctanePreflightLevel::Warning,
+                "Managed PHP mbstring",
+                "DevNest could not inspect whether the active FrankenPHP PHP runtime loads mbstring.",
+                Some("If Start fails during boot, check the worker log for missing PHP extensions.".to_string()),
+                false,
+            )),
+        }
+    }
+
+    Ok(())
+}
+
+fn non_octane_preflight(
+    connection: &Connection,
+    state: &AppState,
+    project: &Project,
+    settings: &FrankenphpOctaneWorkerSettings,
+) -> Result<FrankenphpOctanePreflight, AppError> {
+    let mode = active_worker_mode(project);
+    let project_path = Path::new(&project.path);
+    let mut checks = Vec::new();
+    let mut install_commands = Vec::new();
+
+    match mode {
+        FrankenphpMode::Symfony => {
+            let symfony_ready = matches!(project.framework, FrameworkType::Symfony);
+            checks.push(check(
+                "PROJECT_FRAMEWORK",
+                if symfony_ready {
+                    FrankenphpOctanePreflightLevel::Ok
+                } else {
+                    FrankenphpOctanePreflightLevel::Error
+                },
+                "Symfony project",
+                if symfony_ready {
+                    "Project framework is Symfony."
+                } else {
+                    "Symfony Worker mode requires a Symfony project."
+                },
+                if symfony_ready {
+                    None
+                } else {
+                    Some(
+                        "Switch this project back to Classic or scan a Symfony project."
+                            .to_string(),
+                    )
+                },
+                !symfony_ready,
+            ));
+
+            let public_index = project_path.join("public").join("index.php").exists();
+            checks.push(check(
+                "SYMFONY_PUBLIC_INDEX",
+                if public_index {
+                    FrankenphpOctanePreflightLevel::Ok
+                } else {
+                    FrankenphpOctanePreflightLevel::Error
+                },
+                "Symfony front controller",
+                if public_index {
+                    "`public/index.php` exists."
+                } else {
+                    "`public/index.php` was not found."
+                },
+                if public_index {
+                    None
+                } else {
+                    Some("Confirm the document root points at a Symfony application.".to_string())
+                },
+                !public_index,
+            ));
+
+            let composer_json_exists = project_path.join("composer.json").exists();
+            checks.push(check(
+                "COMPOSER_JSON",
+                if composer_json_exists {
+                    FrankenphpOctanePreflightLevel::Ok
+                } else {
+                    FrankenphpOctanePreflightLevel::Error
+                },
+                "Composer metadata",
+                if composer_json_exists {
+                    "`composer.json` exists."
+                } else {
+                    "`composer.json` was not found."
+                },
+                if composer_json_exists {
+                    None
+                } else {
+                    Some("Run this from a Symfony project with Composer metadata.".to_string())
+                },
+                !composer_json_exists,
+            ));
+
+            let runtime_ready = symfony_runtime_ready(project_path);
+            checks.push(check(
+                "SYMFONY_RUNTIME",
+                if runtime_ready {
+                    FrankenphpOctanePreflightLevel::Ok
+                } else {
+                    FrankenphpOctanePreflightLevel::Error
+                },
+                "Symfony Runtime",
+                if runtime_ready {
+                    "Symfony Runtime supports FrankenPHP worker mode."
+                } else {
+                    "Symfony Runtime support for FrankenPHP was not detected."
+                },
+                if runtime_ready {
+                    None
+                } else {
+                    Some("Run the shown Composer command in the project terminal.".to_string())
+                },
+                !runtime_ready,
+            ));
+            if !runtime_ready {
+                install_commands.push("composer require runtime/frankenphp-symfony".to_string());
+            }
+        }
+        FrankenphpMode::Custom => match custom_worker_path(project, settings) {
+            Ok(path) => checks.push(check(
+                "CUSTOM_WORKER_FILE",
+                FrankenphpOctanePreflightLevel::Ok,
+                "Custom worker file",
+                format!("{} is inside the project and uses .php.", path.display()),
+                None,
+                false,
+            )),
+            Err(error) => checks.push(check(
+                "CUSTOM_WORKER_FILE",
+                FrankenphpOctanePreflightLevel::Error,
+                "Custom worker file",
+                error.message,
+                Some("Choose a project-relative .php worker file in Project Settings.".to_string()),
+                true,
+            )),
+        },
+        _ => {}
+    }
+
+    push_common_worker_checks(connection, state, project, settings, &mut checks)?;
+    let ready = checks.iter().all(|item| !item.blocking);
+
+    Ok(FrankenphpOctanePreflight {
+        project_id: project.id.clone(),
+        mode,
+        ready,
+        summary: if ready {
+            format!(
+                "{} is ready to start behind FrankenPHP.",
+                mode_label(&settings.mode)
+            )
+        } else {
+            format!(
+                "Fix the blocking {} checks before starting the worker.",
+                mode_label(&settings.mode)
+            )
+        },
+        install_commands,
+        checks,
+        generated_at: now_iso()?,
+    })
+}
+
 pub fn get_settings(
     connection: &Connection,
     state: &AppState,
     project_id: &str,
 ) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
-    validate_project_is_octane_target(connection, project_id)?;
-    FrankenphpOctaneWorkerRepository::get_or_create(connection, &state.workspace_dir, project_id)
+    let project = validate_project_is_worker_target(connection, project_id)?;
+    FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
+        connection,
+        &state.workspace_dir,
+        project_id,
+        active_worker_mode(&project),
+    )
 }
 
 pub fn preflight(
@@ -684,11 +1176,15 @@ pub fn preflight(
     project_id: &str,
 ) -> Result<FrankenphpOctanePreflight, AppError> {
     let project = ProjectRepository::get(connection, project_id)?;
-    let mut settings = FrankenphpOctaneWorkerRepository::get_or_create(
+    let mut settings = FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
         connection,
         &state.workspace_dir,
         project_id,
+        active_worker_mode(&project),
     )?;
+    if !matches!(active_worker_mode(&project), FrankenphpMode::Octane) {
+        return non_octane_preflight(connection, state, &project, &settings);
+    }
     let project_path = Path::new(&project.path);
     let mut checks = Vec::new();
     let mut install_commands = vec!["composer require laravel/octane".to_string()];
@@ -1007,6 +1503,7 @@ pub fn preflight(
     let ready = checks.iter().all(|item| !item.blocking);
     Ok(FrankenphpOctanePreflight {
         project_id: project_id.to_string(),
+        mode: FrankenphpMode::Octane,
         ready,
         summary: if ready {
             "Laravel Octane is ready to start behind FrankenPHP.".to_string()
@@ -1024,11 +1521,12 @@ pub fn get_status(
     state: &AppState,
     project_id: &str,
 ) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
-    let project = validate_project_is_octane_target(connection, project_id)?;
-    let current = FrankenphpOctaneWorkerRepository::get_or_create(
+    let project = validate_project_is_worker_target(connection, project_id)?;
+    let current = FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
         connection,
         &state.workspace_dir,
         project_id,
+        active_worker_mode(&project),
     )?;
     let sync = sync_tracked_process(state, project_id, &project.name)?;
 
@@ -1046,7 +1544,7 @@ pub fn get_status(
             project_id,
             sync.exit_message
                 .as_deref()
-                .unwrap_or("The Octane worker stopped unexpectedly."),
+                .unwrap_or("The FrankenPHP worker stopped unexpectedly."),
         );
     }
 
@@ -1069,7 +1567,7 @@ pub fn health(
     state: &AppState,
     project_id: &str,
 ) -> Result<FrankenphpOctaneWorkerHealth, AppError> {
-    let project = validate_project_is_octane_target(connection, project_id)?;
+    let project = validate_project_is_worker_target(connection, project_id)?;
     let settings = get_status(connection, state, project_id)?;
     let log_tail = log_reader::read_tail(Path::new(&settings.log_path), 80).unwrap_or_default();
     let (metrics_available, request_count) =
@@ -1082,6 +1580,7 @@ pub fn health(
 
     Ok(FrankenphpOctaneWorkerHealth {
         project_id: project_id.to_string(),
+        mode: settings.mode.clone(),
         status: settings.status.clone(),
         pid: settings.pid,
         uptime_seconds: uptime_seconds(settings.last_started_at.as_deref()),
@@ -1109,7 +1608,7 @@ fn runtime_command_env(
             .ok_or_else(|| {
                 AppError::new_validation(
                     "RUNTIME_NOT_AVAILABLE",
-                    "Select an active FrankenPHP runtime before starting Laravel Octane.",
+                    "Select an active FrankenPHP runtime before starting the worker.",
                 )
             })?;
     let binary_path = PathBuf::from(&runtime.path);
@@ -1125,6 +1624,89 @@ fn runtime_command_env(
     Ok((binary_path, env))
 }
 
+fn caddy_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn managed_worker_caddyfile_path(state: &AppState, project_id: &str) -> PathBuf {
+    state
+        .workspace_dir
+        .join("managed-configs")
+        .join("frankenphp-workers")
+        .join(format!("{project_id}.Caddyfile"))
+}
+
+fn relative_worker_for_mode(
+    project: &Project,
+    settings: &FrankenphpOctaneWorkerSettings,
+) -> Result<String, AppError> {
+    match project.frankenphp_mode {
+        FrankenphpMode::Symfony => Ok("index.php".to_string()),
+        FrankenphpMode::Custom => {
+            let worker = custom_worker_path(project, settings)?;
+            let public_path = resolve_project_public_path(project)
+                .canonicalize()
+                .unwrap_or_else(|_| resolve_project_public_path(project));
+            let relative = worker
+                .strip_prefix(&public_path)
+                .ok()
+                .and_then(|path| path.to_str());
+            Ok(relative
+                .map(|value| value.replace('\\', "/"))
+                .unwrap_or_else(|| caddy_path(&worker)))
+        }
+        _ => Ok("index.php".to_string()),
+    }
+}
+
+fn generate_managed_worker_caddyfile(
+    state: &AppState,
+    project: &Project,
+    settings: &FrankenphpOctaneWorkerSettings,
+) -> Result<PathBuf, AppError> {
+    let caddyfile_path = managed_worker_caddyfile_path(state, &project.id);
+    if let Some(parent) = caddyfile_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let document_root = resolve_project_public_path(project);
+    let worker_file = relative_worker_for_mode(project, settings)?;
+    let mut worker_env = String::new();
+    if matches!(project.frankenphp_mode, FrankenphpMode::Symfony) {
+        if let Some(runtime_class) = symfony_worker_runtime_env(Path::new(&project.path)) {
+            worker_env.push_str(&format!("            env APP_RUNTIME {runtime_class}\n"));
+        }
+        worker_env.push_str(&format!(
+            "            env FRANKENPHP_LOOP_MAX {}\n",
+            settings.max_requests
+        ));
+    }
+    worker_env.push_str(&format!(
+        "            env MAX_REQUESTS {}\n",
+        settings.max_requests
+    ));
+
+    let config = format!(
+        "{{\n    admin localhost:{admin_port}\n    auto_https off\n}}\n\nhttp://:{worker_port} {{\n    bind 127.0.0.1\n    root * \"{document_root}\"\n    encode zstd br gzip\n    php_server {{\n        root \"{document_root}\"\n        worker {{\n            file \"{worker_file}\"\n            num {workers}\n{worker_env}        }}\n    }}\n    file_server\n    log {{\n        output file \"{log_path}\"\n    }}\n}}\n",
+        admin_port = settings.admin_port,
+        worker_port = settings.worker_port,
+        document_root = caddy_path(&document_root),
+        worker_file = worker_file,
+        workers = settings.workers,
+        worker_env = worker_env,
+        log_path = caddy_path(Path::new(&settings.log_path)),
+    );
+    fs::write(&caddyfile_path, config).map_err(|error| {
+        AppError::with_details(
+            "FRANKENPHP_WORKER_CADDYFILE_FAILED",
+            "Could not write the managed FrankenPHP worker Caddyfile.",
+            error.to_string(),
+        )
+    })?;
+
+    Ok(caddyfile_path)
+}
+
 fn wait_for_worker_port(
     child: &mut std::process::Child,
     project_name: &str,
@@ -1135,7 +1717,7 @@ fn wait_for_worker_port(
         match child.try_wait() {
             Ok(Some(status)) => {
                 let error_message = status_message(project_name, &status).unwrap_or_else(|| {
-                    "Laravel Octane exited immediately after launch.".to_string()
+                    "FrankenPHP worker exited immediately after launch.".to_string()
                 });
                 return Err(AppError::with_details(
                     "FRANKENPHP_WORKER_START_FAILED",
@@ -1162,9 +1744,146 @@ fn wait_for_worker_port(
     let _ = kill_process_tree(child.id());
     Err(AppError::with_details(
         "FRANKENPHP_WORKER_START_FAILED",
-        format!("Laravel Octane started but did not listen on port {worker_port}."),
+        format!("FrankenPHP worker started but did not listen on port {worker_port}."),
         log_reader::read_tail(log_path, 60)?,
     ))
+}
+
+fn ensure_frankenphp_ingress_ready_for_worker(
+    connection: &Connection,
+    state: &AppState,
+) -> Result<(), AppError> {
+    service_manager::sync_managed_configs_for_service(connection, state, &ServiceName::Frankenphp)?;
+    let service = service_manager::get_service_status(connection, state, ServiceName::Frankenphp)?;
+    if matches!(service.status, ServiceStatus::Running) {
+        service_manager::restart_service(connection, state, ServiceName::Frankenphp)?;
+    } else {
+        service_manager::start_service(connection, state, ServiceName::Frankenphp)?;
+    }
+
+    Ok(())
+}
+
+fn start_managed_worker(
+    connection: &Connection,
+    state: &AppState,
+    project: Project,
+) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
+    let project_id = project.id.as_str();
+    let current = get_status(connection, state, project_id)?;
+    if matches!(current.status, FrankenphpOctaneWorkerStatus::Running) && current.pid.is_some() {
+        return Ok(current);
+    }
+
+    let preflight = preflight(connection, state, project_id)?;
+    if !preflight.ready {
+        let message = preflight_blocking_message(&preflight);
+        return Err(AppError::with_details(
+            "FRANKENPHP_WORKER_PREFLIGHT_FAILED",
+            message,
+            preflight
+                .checks
+                .iter()
+                .filter(|check| check.blocking)
+                .map(|check| format!("{}: {}", check.title, check.message))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+    }
+
+    FrankenphpOctaneWorkerRepository::set_status(
+        connection,
+        project_id,
+        &FrankenphpOctaneWorkerStatus::Starting,
+        None,
+        None,
+        None,
+        None,
+    )?;
+    let settings = FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
+        connection,
+        &state.workspace_dir,
+        project_id,
+        project.frankenphp_mode.clone(),
+    )?;
+    ensure_frankenphp_ingress_ready_for_worker(connection, state)?;
+
+    let (binary_path, env_vars) = runtime_command_env(connection, state)?;
+    let log_path = PathBuf::from(&settings.log_path);
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    let stderr = stdout.try_clone()?;
+    let binary_dir = binary_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    let managed_path = format!(
+        "{}{}{}",
+        binary_dir.to_string_lossy(),
+        path_separator,
+        existing_path
+    );
+    let caddyfile_path = generate_managed_worker_caddyfile(state, &project, &settings)?;
+
+    let mut command = Command::new(&binary_path);
+    command.args(["run", "-c"]);
+    command.arg(&caddyfile_path);
+    for (key, value) in env_vars {
+        command.env(key, value);
+    }
+    command.env("PATH", managed_path);
+    command.env(
+        "APP_ENV",
+        read_dotenv_value(Path::new(&project.path), "APP_ENV")
+            .unwrap_or_else(|| "local".to_string()),
+    );
+    command.env("MAX_REQUESTS", settings.max_requests.to_string());
+    command.current_dir(Path::new(&project.path));
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::from(stdout));
+    command.stderr(Stdio::from(stderr));
+    configure_background_command(&mut command);
+
+    let mut child = command.spawn().map_err(|error| {
+        AppError::with_details(
+            "FRANKENPHP_WORKER_START_FAILED",
+            format!(
+                "Could not start the {}.",
+                mode_label(&project.frankenphp_mode)
+            ),
+            error.to_string(),
+        )
+    })?;
+
+    if let Err(error) =
+        wait_for_worker_port(&mut child, &project.name, settings.worker_port, &log_path)
+    {
+        let _ = save_error(connection, project_id, &error.message);
+        return Err(error);
+    }
+
+    let pid = child.id();
+    state
+        .managed_worker_processes
+        .lock()
+        .map_err(|_| mutex_error())?
+        .insert(
+            process_key(project_id),
+            ManagedWorkerProcess {
+                pid,
+                child,
+                log_path,
+            },
+        );
+
+    save_running(connection, project_id, pid)
 }
 
 pub fn start(
@@ -1172,11 +1891,20 @@ pub fn start(
     state: &AppState,
     project_id: &str,
 ) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
-    let project = validate_project_is_octane_target(connection, project_id)?;
-    if !matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+    let project = validate_project_is_worker_target(connection, project_id)?;
+    if matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
         return Err(AppError::new_validation(
             "FRANKENPHP_WORKER_MODE_DISABLED",
-            "Switch this FrankenPHP project to Laravel Octane Worker mode before starting the worker.",
+            "Switch this FrankenPHP project to a Worker mode before starting the worker.",
+        ));
+    }
+    if !matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+        return start_managed_worker(connection, state, project);
+    }
+    if !matches!(project.framework, FrameworkType::Laravel) {
+        return Err(AppError::new_validation(
+            "FRANKENPHP_WORKER_UNAVAILABLE",
+            "Laravel Octane Worker mode is only available for Laravel projects.",
         ));
     }
 
@@ -1187,9 +1915,10 @@ pub fn start(
 
     let preflight = preflight(connection, state, project_id)?;
     if !preflight.ready {
+        let message = preflight_blocking_message(&preflight);
         return Err(AppError::with_details(
             "FRANKENPHP_WORKER_PREFLIGHT_FAILED",
-            preflight.summary,
+            message,
             preflight
                 .checks
                 .iter()
@@ -1214,10 +1943,7 @@ pub fn start(
         &state.workspace_dir,
         project_id,
     )?;
-    let service = service_manager::get_service_status(connection, state, ServiceName::Frankenphp)?;
-    if !matches!(service.status, ServiceStatus::Running) {
-        service_manager::start_service(connection, state, ServiceName::Frankenphp)?;
-    }
+    ensure_frankenphp_ingress_ready_for_worker(connection, state)?;
 
     let (binary_path, env_vars) = runtime_command_env(connection, state)?;
     let log_path = PathBuf::from(&settings.log_path);
@@ -1335,10 +2061,12 @@ pub fn stop(
     state: &AppState,
     project_id: &str,
 ) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
-    let _ = FrankenphpOctaneWorkerRepository::get_or_create(
+    let project = validate_project_is_worker_target(connection, project_id)?;
+    let _ = FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
         connection,
         &state.workspace_dir,
         project_id,
+        active_worker_mode(&project),
     )?;
     let key = process_key(project_id);
     let tracked = state
@@ -1357,7 +2085,7 @@ pub fn stop(
             Err(error) => {
                 return Err(AppError::with_details(
                     "FRANKENPHP_WORKER_STOP_FAILED",
-                    "Could not inspect the Octane worker before stopping it.",
+                    "Could not inspect the FrankenPHP worker before stopping it.",
                     error.to_string(),
                 ));
             }
@@ -1398,12 +2126,12 @@ pub fn reload(
     state: &AppState,
     project_id: &str,
 ) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
-    validate_project_is_octane_target(connection, project_id)?;
+    validate_project_is_worker_target(connection, project_id)?;
     let status = get_status(connection, state, project_id)?;
     if !matches!(status.status, FrankenphpOctaneWorkerStatus::Running) {
         return Err(AppError::new_validation(
             "FRANKENPHP_WORKER_NOT_RUNNING",
-            "Start the Laravel Octane worker before sending a reload signal.",
+            "Start the FrankenPHP worker before sending a reload signal.",
         ));
     }
 
@@ -1457,14 +2185,15 @@ pub fn read_logs(
     lines: usize,
 ) -> Result<log_reader::ProjectWorkerLogPayload, AppError> {
     let project = ProjectRepository::get(connection, project_id)?;
-    let settings = FrankenphpOctaneWorkerRepository::get_or_create(
+    let settings = FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
         connection,
         &state.workspace_dir,
         project_id,
+        active_worker_mode(&project),
     )?;
     log_reader::read_tail_payload(
         Path::new(&settings.log_path),
-        &format!("{} Octane", project.name),
+        &format!("{} {}", project.name, mode_label(&settings.mode)),
         lines,
     )
 }
@@ -1475,7 +2204,7 @@ pub fn mark_stale_for_frankenphp_stop(
 ) -> Result<(), AppError> {
     for project in ProjectRepository::list(connection)?
         .into_iter()
-        .filter(|project| matches!(project.frankenphp_mode, FrankenphpMode::Octane))
+        .filter(|project| !matches!(project.frankenphp_mode, FrankenphpMode::Classic))
     {
         let _ = stop(connection, state, &project.id);
     }
@@ -1512,7 +2241,7 @@ pub fn auto_start_previous_octane_workers(connection: &Connection, state: &AppSt
             }
         };
 
-        if !matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+        if matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
             let _ = save_stopped(connection, &worker.project_id);
             continue;
         }

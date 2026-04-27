@@ -7,6 +7,7 @@ export type FrankenphpOctaneWorkerStatus =
 
 export interface FrankenphpOctaneWorkerSettings {
   projectId: string;
+  mode: "octane" | "symfony" | "custom";
   workerPort: number;
   adminPort: number;
   workers: number;
@@ -17,6 +18,7 @@ export interface FrankenphpOctaneWorkerSettings {
   lastStoppedAt?: string | null;
   lastError?: string | null;
   logPath: string;
+  customWorkerRelativePath?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -38,6 +40,7 @@ export interface FrankenphpRuntimeHealth {
 
 export interface FrankenphpOctaneWorkerHealth {
   projectId: string;
+  mode: "octane" | "symfony" | "custom";
   status: FrankenphpOctaneWorkerStatus;
   pid?: number | null;
   uptimeSeconds?: number | null;
@@ -56,10 +59,12 @@ export interface FrankenphpOctaneWorkerHealth {
 }
 
 export interface UpdateFrankenphpOctaneWorkerSettingsInput {
+  mode?: "octane" | "symfony" | "custom";
   workerPort?: number;
   adminPort?: number;
   workers?: number;
   maxRequests?: number;
+  customWorkerRelativePath?: string | null;
 }
 
 export type FrankenphpOctanePreflightLevel = "ok" | "warning" | "error";
@@ -75,9 +80,15 @@ export interface FrankenphpOctanePreflightCheck {
 
 export interface FrankenphpOctanePreflight {
   projectId: string;
+  mode: "octane" | "symfony" | "custom";
   ready: boolean;
   summary: string;
   installCommands: string[];
   checks: FrankenphpOctanePreflightCheck[];
   generatedAt: string;
 }
+
+export type FrankenphpWorkerSettings = FrankenphpOctaneWorkerSettings;
+export type FrankenphpWorkerHealth = FrankenphpOctaneWorkerHealth;
+export type FrankenphpWorkerPreflight = FrankenphpOctanePreflight;
+export type UpdateFrankenphpWorkerSettingsInput = UpdateFrankenphpOctaneWorkerSettingsInput;

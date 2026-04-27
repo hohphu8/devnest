@@ -32,12 +32,13 @@ pub fn preview_vhost_config(
 ) -> Result<PreviewVhostConfigResult, AppError> {
     let connection = connection_from_state(&state)?;
     let project = ProjectRepository::get(&connection, &project_id)?;
-    let octane_worker_port = if matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+    let worker_port = if !matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
         Some(
-            FrankenphpOctaneWorkerRepository::get_or_create(
+            FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
                 &connection,
                 &state.workspace_dir,
                 &project.id,
+                project.frankenphp_mode.clone(),
             )?
             .worker_port,
         )
@@ -47,7 +48,7 @@ pub fn preview_vhost_config(
     let rendered = config_generator::preview_config_with_frankenphp_worker_port(
         &project,
         &state.workspace_dir,
-        octane_worker_port,
+        worker_port,
     )?;
 
     Ok(PreviewVhostConfigResult {
@@ -64,12 +65,13 @@ pub fn generate_vhost_config(
 ) -> Result<GenerateVhostConfigResult, AppError> {
     let connection = connection_from_state(&state)?;
     let project = ProjectRepository::get(&connection, &project_id)?;
-    let octane_worker_port = if matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+    let worker_port = if !matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
         Some(
-            FrankenphpOctaneWorkerRepository::get_or_create(
+            FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
                 &connection,
                 &state.workspace_dir,
                 &project.id,
+                project.frankenphp_mode.clone(),
             )?
             .worker_port,
         )
@@ -80,7 +82,7 @@ pub fn generate_vhost_config(
         &project,
         &state.workspace_dir,
         &[],
-        octane_worker_port,
+        worker_port,
     )?;
 
     Ok(GenerateVhostConfigResult {

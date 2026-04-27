@@ -3,6 +3,7 @@ use crate::models::frankenphp_octane::{
     FrankenphpOctaneWorkerSettings, FrankenphpOctaneWorkerStatus,
     UpdateFrankenphpOctaneWorkerSettingsInput,
 };
+use crate::models::project::FrankenphpMode;
 use crate::storage::repositories::now_iso;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::path::Path;
@@ -21,9 +22,19 @@ fn parse_status(value: &str) -> Result<FrankenphpOctaneWorkerStatus, AppError> {
     })
 }
 
+fn parse_mode(value: &str) -> Result<FrankenphpMode, AppError> {
+    value.parse().map_err(|_| {
+        AppError::new_validation(
+            "INVALID_FRANKENPHP_MODE",
+            "Stored FrankenPHP worker mode is invalid.",
+        )
+    })
+}
+
 fn map_row(row: &Row<'_>) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
     Ok(FrankenphpOctaneWorkerSettings {
         project_id: row.get("project_id")?,
+        mode: parse_mode(&row.get::<_, String>("mode")?)?,
         worker_port: row.get("worker_port")?,
         admin_port: row.get("admin_port")?,
         workers: row.get("workers")?,
@@ -34,6 +45,7 @@ fn map_row(row: &Row<'_>) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
         last_stopped_at: row.get("last_stopped_at")?,
         last_error: row.get("last_error")?,
         log_path: row.get("log_path")?,
+        custom_worker_relative_path: row.get("custom_worker_relative_path")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -80,7 +92,7 @@ fn next_available_port(
     end: i64,
 ) -> Result<i64, AppError> {
     let mut statement = connection.prepare(&format!(
-        "SELECT {column} FROM project_frankenphp_octane_workers ORDER BY {column} ASC"
+        "SELECT {column} FROM project_frankenphp_workers ORDER BY {column} ASC"
     ))?;
     let used = statement
         .query_map([], |row| row.get::<_, i64>(0))?
@@ -94,14 +106,14 @@ fn next_available_port(
 
     Err(AppError::new_validation(
         "FRANKENPHP_WORKER_PORTS_EXHAUSTED",
-        "No available FrankenPHP Octane worker ports remain in the managed range.",
+        "No available FrankenPHP worker ports remain in the managed range.",
     ))
 }
 
 pub fn default_log_path(workspace_dir: &Path, project_id: &str) -> String {
     workspace_dir
         .join("runtime-logs")
-        .join("frankenphp-octane")
+        .join("frankenphp-workers")
         .join(format!("{project_id}.log"))
         .to_string_lossy()
         .to_string()
@@ -116,7 +128,7 @@ impl FrankenphpOctaneWorkerRepository {
         let mut statement = connection.prepare(
             "
             SELECT *
-            FROM project_frankenphp_octane_workers
+            FROM project_frankenphp_workers
             ORDER BY updated_at DESC, created_at DESC
             ",
         )?;
@@ -136,7 +148,7 @@ impl FrankenphpOctaneWorkerRepository {
         let mut statement = connection.prepare(
             "
             SELECT *
-            FROM project_frankenphp_octane_workers
+            FROM project_frankenphp_workers
             WHERE project_id = ?1
             ",
         )?;
@@ -154,7 +166,34 @@ impl FrankenphpOctaneWorkerRepository {
         workspace_dir: &Path,
         project_id: &str,
     ) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
+        Self::get_or_create_for_mode(
+            connection,
+            workspace_dir,
+            project_id,
+            FrankenphpMode::Octane,
+        )
+    }
+
+    pub fn get_or_create_for_mode(
+        connection: &Connection,
+        workspace_dir: &Path,
+        project_id: &str,
+        mode: FrankenphpMode,
+    ) -> Result<FrankenphpOctaneWorkerSettings, AppError> {
         if let Some(settings) = Self::get(connection, project_id)? {
+            if settings.mode.as_str() != mode.as_str() {
+                let timestamp = now_iso()?;
+                connection.execute(
+                    "
+                    UPDATE project_frankenphp_workers
+                    SET mode = ?2,
+                        updated_at = ?3
+                    WHERE project_id = ?1
+                    ",
+                    params![project_id, mode.as_str(), timestamp],
+                )?;
+                return Ok(Self::get(connection, project_id)?.expect("settings updated above"));
+            }
             return Ok(settings);
         }
 
@@ -171,13 +210,20 @@ impl FrankenphpOctaneWorkerRepository {
 
         connection.execute(
             "
-            INSERT INTO project_frankenphp_octane_workers (
-              project_id, worker_port, admin_port, workers, max_requests, status, pid,
-              last_started_at, last_stopped_at, last_error, log_path, created_at, updated_at
+            INSERT INTO project_frankenphp_workers (
+              project_id, mode, worker_port, admin_port, workers, max_requests, status, pid,
+              last_started_at, last_stopped_at, last_error, log_path, custom_worker_relative_path, created_at, updated_at
             )
-            VALUES (?1, ?2, ?3, 1, 500, 'stopped', NULL, NULL, NULL, NULL, ?4, ?5, ?5)
+            VALUES (?1, ?2, ?3, ?4, 1, 500, 'stopped', NULL, NULL, NULL, NULL, ?5, NULL, ?6, ?6)
             ",
-            params![project_id, worker_port, admin_port, log_path, timestamp],
+            params![
+                project_id,
+                mode.as_str(),
+                worker_port,
+                admin_port,
+                log_path,
+                timestamp
+            ],
         )?;
 
         Ok(Self::get(connection, project_id)?.expect("settings created above"))
@@ -227,16 +273,32 @@ impl FrankenphpOctaneWorkerRepository {
             }
             None => current.max_requests,
         };
+        let next_mode = input.mode.unwrap_or_else(|| current.mode.clone());
+        let next_custom_worker_relative_path = input
+            .custom_worker_relative_path
+            .map(|value| {
+                value.and_then(|path| {
+                    let trimmed = path.trim().to_string();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed)
+                    }
+                })
+            })
+            .unwrap_or_else(|| current.custom_worker_relative_path.clone());
         let timestamp = now_iso()?;
 
         connection.execute(
             "
-            UPDATE project_frankenphp_octane_workers
+            UPDATE project_frankenphp_workers
             SET worker_port = ?2,
                 admin_port = ?3,
                 workers = ?4,
                 max_requests = ?5,
-                updated_at = ?6
+                mode = ?6,
+                custom_worker_relative_path = ?7,
+                updated_at = ?8
             WHERE project_id = ?1
             ",
             params![
@@ -245,6 +307,8 @@ impl FrankenphpOctaneWorkerRepository {
                 admin_port,
                 workers,
                 max_requests,
+                next_mode.as_str(),
+                next_custom_worker_relative_path,
                 timestamp
             ],
         )?;
@@ -264,7 +328,7 @@ impl FrankenphpOctaneWorkerRepository {
         let timestamp = now_iso()?;
         connection.execute(
             "
-            UPDATE project_frankenphp_octane_workers
+            UPDATE project_frankenphp_workers
             SET status = ?2,
                 pid = ?3,
                 last_started_at = COALESCE(?4, last_started_at),

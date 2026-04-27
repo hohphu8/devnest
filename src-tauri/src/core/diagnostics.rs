@@ -77,6 +77,16 @@ fn required_php_extensions(project: &Project, project_path: &Path) -> Vec<String
             "tokenizer",
             "xml",
         ],
+        FrameworkType::Symfony => &[
+            "ctype",
+            "iconv",
+            "intl",
+            "mbstring",
+            "openssl",
+            "pdo_mysql",
+            "tokenizer",
+            "xml",
+        ],
         FrameworkType::Wordpress => &[
             "curl", "dom", "gd", "json", "mysqli", "openssl", "xml", "zip",
         ],

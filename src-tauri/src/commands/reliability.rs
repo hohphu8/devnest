@@ -114,12 +114,13 @@ fn repair_project_workflow(
     let aliases = ProjectPersistentHostnameRepository::get_by_project(connection, project_id)?
         .map(|item| vec![item.hostname])
         .unwrap_or_default();
-    let octane_worker_port = if matches!(refreshed.frankenphp_mode, FrankenphpMode::Octane) {
+    let worker_port = if !matches!(refreshed.frankenphp_mode, FrankenphpMode::Classic) {
         Some(
-            FrankenphpOctaneWorkerRepository::get_or_create(
+            FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
                 connection,
                 &state.workspace_dir,
                 &refreshed.id,
+                refreshed.frankenphp_mode.clone(),
             )?
             .worker_port,
         )
@@ -130,7 +131,7 @@ fn repair_project_workflow(
         &refreshed,
         &state.workspace_dir,
         &aliases,
-        octane_worker_port,
+        worker_port,
     )?;
     let _ = hosts::apply_hosts_entry(refreshed.domain.clone(), None)?;
 

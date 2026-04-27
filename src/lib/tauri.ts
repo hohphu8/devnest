@@ -590,10 +590,16 @@ function mockFrankenphpOctaneLogKey(projectId: string) {
 function getMockFrankenphpOctaneSettings(projectId: string): FrankenphpOctaneWorkerSettings {
   const stored = readMockFrankenphpOctaneWorkers();
   if (stored[projectId]) {
-    return stored[projectId];
+    const project = readMockProjects().find((item) => item.id === projectId);
+    return {
+      ...stored[projectId],
+      mode: stored[projectId].mode ?? (project?.frankenphpMode === "symfony" || project?.frankenphpMode === "custom" ? project.frankenphpMode : "octane"),
+      customWorkerRelativePath: stored[projectId].customWorkerRelativePath ?? null,
+    };
   }
 
   const timestamp = new Date().toISOString();
+  const project = readMockProjects().find((item) => item.id === projectId);
   const usedWorkerPorts = new Set(Object.values(stored).map((worker) => worker.workerPort));
   const usedAdminPorts = new Set(Object.values(stored).map((worker) => worker.adminPort));
   const workerPort =
@@ -602,6 +608,7 @@ function getMockFrankenphpOctaneSettings(projectId: string): FrankenphpOctaneWor
     Array.from({ length: 100 }, (_, index) => 9100 + index).find((port) => !usedAdminPorts.has(port)) ?? 9100;
   const settings: FrankenphpOctaneWorkerSettings = {
     projectId,
+    mode: project?.frankenphpMode === "symfony" || project?.frankenphpMode === "custom" ? project.frankenphpMode : "octane",
     workerPort,
     adminPort,
     workers: 1,
@@ -612,6 +619,7 @@ function getMockFrankenphpOctaneSettings(projectId: string): FrankenphpOctaneWor
     lastStoppedAt: null,
     lastError: null,
     logPath: `${MOCK_APP_DATA_ROOT}/runtime-logs/frankenphp-octane/${projectId}.log`,
+    customWorkerRelativePath: null,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -665,6 +673,7 @@ function buildMockFrankenphpOctaneHealth(projectId: string): FrankenphpOctaneWor
 
   return {
     projectId,
+    mode: settings.mode,
     status: settings.status,
     pid: settings.pid,
     uptimeSeconds,
@@ -2297,6 +2306,21 @@ function inferFrameworkFromPath(path: string): ScanResult {
     };
   }
 
+  if (normalized.includes("symfony")) {
+    return {
+      framework: "symfony",
+      recommendedServer: "nginx",
+      serverReason: "Browser mock uses folder-name heuristics and defaults Symfony to Nginx.",
+      recommendedPhpVersion: "8.2",
+      suggestedDomain: `${name}.test`,
+      documentRoot: "public",
+      documentRootReason: "Browser mock found a Symfony-like path and assumed public/ as the web root.",
+      detectedFiles: ["bin/console", "config/bundles.php", "public/index.php"],
+      warnings: [],
+      missingPhpExtensions: ["ctype", "iconv", "intl", "mbstring", "openssl", "pdo_mysql", "tokenizer", "xml"],
+    };
+  }
+
   if (normalized.includes("wordpress") || normalized.includes("wp")) {
     return {
       framework: "wordpress",
@@ -2366,6 +2390,21 @@ function validateMockProjectInput(input: CreateProjectInput) {
     throw {
       code: "INVALID_FRANKENPHP_MODE",
       message: "Laravel Octane Worker mode is only available for Laravel projects using FrankenPHP.",
+    } satisfies AppError;
+  }
+  if (
+    input.frankenphpMode === "symfony" &&
+    (input.serverType !== "frankenphp" || input.framework !== "symfony")
+  ) {
+    throw {
+      code: "INVALID_FRANKENPHP_MODE",
+      message: "Symfony Worker mode is only available for Symfony projects using FrankenPHP.",
+    } satisfies AppError;
+  }
+  if (input.frankenphpMode === "custom" && input.serverType !== "frankenphp") {
+    throw {
+      code: "INVALID_FRANKENPHP_MODE",
+      message: "Custom FrankenPHP Worker mode is only available for FrankenPHP projects.",
     } satisfies AppError;
   }
 }
@@ -2553,6 +2592,7 @@ function mockDiagnostics(projectId: string): DiagnosticItem[] {
 function buildMockFrankenphpOctanePreflight(projectId: string): FrankenphpOctanePreflight {
   const project = getMockProjectOrThrow(projectId);
   const settings = getMockFrankenphpOctaneSettings(projectId);
+  const mode = project.frankenphpMode === "symfony" || project.frankenphpMode === "custom" ? project.frankenphpMode : "octane";
   const runtime = readMockRuntimes().find((item) => item.runtimeType === "frankenphp" && item.isActive);
   const workerConflict = readMockServices().find(
     (service) => service.status === "running" && service.port === settings.workerPort,
@@ -2563,14 +2603,30 @@ function buildMockFrankenphpOctanePreflight(projectId: string): FrankenphpOctane
   const checks: FrankenphpOctanePreflight["checks"] = [
     {
       code: "PROJECT_FRAMEWORK",
-      level: project.framework === "laravel" ? "ok" : "error",
-      title: "Laravel project",
+      level:
+        mode === "octane"
+          ? project.framework === "laravel" ? "ok" : "error"
+          : mode === "symfony"
+            ? project.framework === "symfony" ? "ok" : "error"
+            : "ok",
+      title: mode === "octane" ? "Laravel project" : mode === "symfony" ? "Symfony project" : "FrankenPHP project",
       message:
-        project.framework === "laravel"
+        mode === "octane" && project.framework === "laravel"
           ? "Project framework is Laravel."
-          : "Worker mode is Laravel-only in this phase.",
-      suggestion: project.framework === "laravel" ? null : "Use Classic mode for non-Laravel projects.",
-      blocking: project.framework !== "laravel",
+          : mode === "symfony" && project.framework === "symfony"
+            ? "Project framework is Symfony."
+            : mode === "custom"
+              ? "Custom worker mode can be used by this FrankenPHP project."
+              : `${mode === "octane" ? "Laravel Octane" : "Symfony"} Worker mode is not available for this framework.`,
+      suggestion:
+        mode === "custom" ||
+        (mode === "octane" && project.framework === "laravel") ||
+        (mode === "symfony" && project.framework === "symfony")
+          ? null
+          : "Use Classic mode or switch to a matching project framework.",
+      blocking:
+        (mode === "octane" && project.framework !== "laravel") ||
+        (mode === "symfony" && project.framework !== "symfony"),
     },
     {
       code: "SERVER_TYPE",
@@ -2579,21 +2635,48 @@ function buildMockFrankenphpOctanePreflight(projectId: string): FrankenphpOctane
       message:
         project.serverType === "frankenphp"
           ? "Project is configured for FrankenPHP."
-          : "Octane worker mode must stay behind FrankenPHP.",
+          : "Worker mode must stay behind FrankenPHP.",
       suggestion: project.serverType === "frankenphp" ? null : "Change the project server to FrankenPHP.",
       blocking: project.serverType !== "frankenphp",
     },
     {
       code: "OCTANE_PACKAGE",
-      level: project.name.toLowerCase().includes("octane") ? "ok" : "error",
-      title: "Laravel Octane package",
-      message: project.name.toLowerCase().includes("octane")
-        ? "`laravel/octane` is present in preview metadata."
-        : "`laravel/octane` is not installed yet.",
-      suggestion: project.name.toLowerCase().includes("octane")
-        ? null
-        : "Run the shown Composer command in the project terminal.",
-      blocking: !project.name.toLowerCase().includes("octane"),
+      level:
+        mode === "octane"
+          ? project.name.toLowerCase().includes("octane") ? "ok" : "error"
+          : mode === "symfony"
+            ? project.name.toLowerCase().includes("runtime") || project.name.toLowerCase().includes("symfony") ? "ok" : "error"
+            : settings.customWorkerRelativePath ? "ok" : "error",
+      title:
+        mode === "octane"
+          ? "Laravel Octane package"
+          : mode === "symfony"
+            ? "Symfony Runtime"
+            : "Custom worker file",
+      message:
+        mode === "octane"
+          ? project.name.toLowerCase().includes("octane")
+            ? "`laravel/octane` is present in preview metadata."
+            : "`laravel/octane` is not installed yet."
+          : mode === "symfony"
+            ? project.name.toLowerCase().includes("runtime") || project.name.toLowerCase().includes("symfony")
+              ? "Symfony Runtime support is present in preview metadata."
+              : "Symfony Runtime support for FrankenPHP was not detected."
+            : settings.customWorkerRelativePath
+              ? `${settings.customWorkerRelativePath} is selected.`
+              : "No custom worker file is selected.",
+      suggestion:
+        mode === "octane" && !project.name.toLowerCase().includes("octane")
+          ? "Run the shown Composer command in the project terminal."
+          : mode === "symfony" && !(project.name.toLowerCase().includes("runtime") || project.name.toLowerCase().includes("symfony"))
+            ? "Run the shown Composer command in the project terminal."
+            : mode === "custom" && !settings.customWorkerRelativePath
+              ? "Choose a project-relative PHP worker file in Project Settings."
+              : null,
+      blocking:
+        (mode === "octane" && !project.name.toLowerCase().includes("octane")) ||
+        (mode === "symfony" && !(project.name.toLowerCase().includes("runtime") || project.name.toLowerCase().includes("symfony"))) ||
+        (mode === "custom" && !settings.customWorkerRelativePath),
     },
     {
       code: "FRANKENPHP_RUNTIME",
@@ -2629,12 +2712,15 @@ function buildMockFrankenphpOctanePreflight(projectId: string): FrankenphpOctane
   const ready = checks.every((item) => !item.blocking);
   return {
     projectId,
+    mode,
     ready,
     summary: ready
-      ? "Laravel Octane is ready to start behind FrankenPHP."
-      : "Fix the blocking Octane checks before starting the worker.",
-    installCommands: checks.some((item) => item.code === "OCTANE_PACKAGE" && item.blocking)
+      ? `${mode === "octane" ? "Laravel Octane" : mode === "symfony" ? "Symfony Worker" : "Custom Worker"} is ready to start behind FrankenPHP.`
+      : `Fix the blocking ${mode === "octane" ? "Octane" : mode} checks before starting the worker.`,
+    installCommands: checks.some((item) => item.title === "Laravel Octane package" && item.blocking)
       ? ["composer require laravel/octane"]
+      : checks.some((item) => item.title === "Symfony Runtime" && item.blocking)
+        ? ["composer require runtime/frankenphp-symfony"]
       : [],
     checks,
     generatedAt: new Date().toISOString(),
@@ -2662,10 +2748,10 @@ function buildMockConfigPreview(project: Project) {
   const logsBase = `.devnest/managed-configs/logs/${project.domain}-${project.serverType}`;
   const sslBase = `.devnest/ssl/${project.domain}`;
 
-  if (project.framework === "laravel" && project.documentRoot !== "public") {
+  if ((project.framework === "laravel" || project.framework === "symfony") && project.documentRoot !== "public") {
     throw {
       code: "CONFIG_INVALID_DOCUMENT_ROOT",
-      message: "Laravel projects must use `public` as the document root for generated local config.",
+      message: "Laravel and Symfony projects must use `public` as the document root for generated local config.",
     } satisfies AppError;
   }
 
@@ -2680,7 +2766,7 @@ function buildMockConfigPreview(project: Project) {
     const forwardedProto = project.sslEnabled ? "https" : "http";
     const forwardedPort = project.sslEnabled ? "443" : "80";
     const handlerBlock =
-      project.frankenphpMode === "octane"
+      project.frankenphpMode !== "classic"
         ? `    reverse_proxy 127.0.0.1:${octaneSettings.workerPort} {
         header_up Host {host}
         header_up X-Forwarded-Host {host}
@@ -5173,11 +5259,14 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         adminPort: input.adminPort,
         workers: input.workers,
         maxRequests: input.maxRequests,
+        mode: input.mode,
+        customWorkerRelativePath: input.customWorkerRelativePath,
         status: "stopped",
         pid: null,
       }) as T;
     }
-    case "get_project_frankenphp_octane_preflight": {
+    case "get_project_frankenphp_octane_preflight":
+    case "get_project_frankenphp_worker_preflight": {
       const projectId = String(args?.projectId ?? "");
       return buildMockFrankenphpOctanePreflight(projectId) as T;
     }
@@ -5185,12 +5274,12 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const projectId = String(args?.projectId ?? "");
       const project = getMockProjectOrThrow(projectId);
       const preflight = buildMockFrankenphpOctanePreflight(projectId);
-      if (!preflight.ready || project.frankenphpMode !== "octane") {
+      if (!preflight.ready || project.frankenphpMode === "classic") {
         throw {
           code: "FRANKENPHP_WORKER_PREFLIGHT_FAILED",
           message:
-            project.frankenphpMode !== "octane"
-              ? "Switch this FrankenPHP project to Laravel Octane Worker mode before starting the worker."
+            project.frankenphpMode === "classic"
+              ? "Switch this FrankenPHP project to a Worker mode before starting the worker."
               : preflight.summary,
         } satisfies AppError;
       }
@@ -5206,7 +5295,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const logKey = mockFrankenphpOctaneLogKey(projectId);
       logs[logKey] = [
         ...(logs[logKey] ?? []),
-        `[${timestamp}] Octane worker started on 127.0.0.1:${getMockFrankenphpOctaneSettings(projectId).workerPort}.`,
+        `[${timestamp}] ${preflight.mode} worker started on 127.0.0.1:${getMockFrankenphpOctaneSettings(projectId).workerPort}.`,
       ];
       writeMockServiceLogs(logs);
       return updateMockFrankenphpOctaneSettings(projectId, {
@@ -5241,12 +5330,12 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       if (current.status !== "running") {
         throw {
           code: "FRANKENPHP_WORKER_NOT_RUNNING",
-          message: "Start the Laravel Octane worker before sending a reload signal.",
+          message: "Start the FrankenPHP worker before sending a reload signal.",
         } satisfies AppError;
       }
       const logs = readMockServiceLogs();
       const logKey = mockFrankenphpOctaneLogKey(projectId);
-      logs[logKey] = [...(logs[logKey] ?? []), `[${timestamp}] Octane reload requested.`];
+      logs[logKey] = [...(logs[logKey] ?? []), `[${timestamp}] FrankenPHP worker reload requested.`];
       writeMockServiceLogs(logs);
       return updateMockFrankenphpOctaneSettings(projectId, { lastError: null }) as T;
     }
@@ -5258,7 +5347,7 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       const logKey = mockFrankenphpOctaneLogKey(projectId);
       const selected = (logs[logKey] ?? []).slice(-lines);
       return ({
-        name: `${project.name} Octane`,
+        name: `${project.name} ${getMockFrankenphpOctaneSettings(projectId).mode}`,
         totalLines: logs[logKey]?.length ?? 0,
         truncated: (logs[logKey]?.length ?? 0) > selected.length,
         lines: selected.map((text, index) => ({

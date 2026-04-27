@@ -100,12 +100,14 @@ fn validate_document_root(project_path: &Path, document_root: &str) -> Result<Pa
 }
 
 fn validate_framework_document_root(project: &Project) -> Result<(), AppError> {
-    if matches!(&project.framework, FrameworkType::Laravel)
-        && project.document_root.trim() != "public"
+    if matches!(
+        &project.framework,
+        FrameworkType::Laravel | FrameworkType::Symfony
+    ) && project.document_root.trim() != "public"
     {
         return Err(AppError::new_validation(
             "CONFIG_INVALID_DOCUMENT_ROOT",
-            "Laravel projects must use `public` as the document root for generated local config.",
+            "Laravel and Symfony projects must use `public` as the document root for generated local config.",
         ));
     }
 
@@ -271,15 +273,15 @@ fn render_frankenphp(
     _error_log: &str,
     ssl_paths: Option<&RenderedSslPaths>,
     aliases: &[String],
-    octane_worker_port: Option<i64>,
+    worker_port: Option<i64>,
 ) -> Result<String, AppError> {
     let http_addresses = frankenphp_site_addresses("http", &project.domain, aliases)?;
 
-    if matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
-        let worker_port = octane_worker_port.ok_or_else(|| {
+    if !matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
+        let worker_port = worker_port.ok_or_else(|| {
             AppError::new_validation(
                 "FRANKENPHP_WORKER_SETTINGS_MISSING",
-                "Octane mode requires managed FrankenPHP worker settings before config generation.",
+                "FrankenPHP worker mode requires managed worker settings before config generation.",
             )
         })?;
 
@@ -790,6 +792,33 @@ mod tests {
         );
         assert!(!preview.config_text.contains("php_server"));
         assert!(!preview.config_text.contains("file_server"));
+
+        cleanup(&workspace, &project_root);
+    }
+
+    #[test]
+    fn previews_all_frankenphp_worker_modes_as_reverse_proxy() {
+        let workspace = make_workspace();
+        let project_root = make_project_root(true);
+
+        for (mode, framework, port) in [
+            (FrankenphpMode::Octane, FrameworkType::Laravel, 8123),
+            (FrankenphpMode::Symfony, FrameworkType::Symfony, 8124),
+            (FrankenphpMode::Custom, FrameworkType::Php, 8125),
+        ] {
+            let mut project = sample_project(&project_root, ServerType::Frankenphp, framework);
+            project.frankenphp_mode = mode;
+            let preview =
+                preview_config_with_frankenphp_worker_port(&project, &workspace, Some(port))
+                    .expect("worker preview should succeed");
+
+            assert!(
+                preview
+                    .config_text
+                    .contains(&format!("reverse_proxy 127.0.0.1:{port}"))
+            );
+            assert!(!preview.config_text.contains("php_server"));
+        }
 
         cleanup(&workspace, &project_root);
     }

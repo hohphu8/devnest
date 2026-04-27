@@ -27,13 +27,13 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
           domain TEXT NOT NULL UNIQUE,
           server_type TEXT NOT NULL CHECK(server_type IN ('apache', 'nginx', 'frankenphp')),
           php_version TEXT NOT NULL,
-          framework TEXT NOT NULL CHECK(framework IN ('laravel', 'wordpress', 'php', 'unknown')),
+          framework TEXT NOT NULL CHECK(framework IN ('laravel', 'symfony', 'wordpress', 'php', 'unknown')),
           document_root TEXT NOT NULL,
           ssl_enabled INTEGER NOT NULL DEFAULT 0,
           database_name TEXT,
           database_port INTEGER,
           status TEXT NOT NULL DEFAULT 'stopped' CHECK(status IN ('running', 'stopped', 'error')),
-          frankenphp_mode TEXT NOT NULL DEFAULT 'classic' CHECK(frankenphp_mode IN ('classic', 'octane')),
+          frankenphp_mode TEXT NOT NULL DEFAULT 'classic' CHECK(frankenphp_mode IN ('classic', 'octane', 'symfony', 'custom')),
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
@@ -220,6 +220,25 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
           FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS project_frankenphp_workers (
+          project_id TEXT PRIMARY KEY NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'octane' CHECK(mode IN ('octane', 'symfony', 'custom')),
+          worker_port INTEGER NOT NULL,
+          admin_port INTEGER NOT NULL,
+          workers INTEGER NOT NULL DEFAULT 1,
+          max_requests INTEGER NOT NULL DEFAULT 500,
+          status TEXT NOT NULL DEFAULT 'stopped' CHECK(status IN ('running', 'stopped', 'error', 'starting', 'restarting')),
+          pid INTEGER,
+          last_started_at TEXT,
+          last_stopped_at TEXT,
+          last_error TEXT,
+          log_path TEXT NOT NULL,
+          custom_worker_relative_path TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path);
         CREATE INDEX IF NOT EXISTS idx_projects_domain ON projects(domain);
         CREATE INDEX IF NOT EXISTS idx_project_env_vars_project_id ON project_env_vars(project_id);
@@ -241,6 +260,8 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
         CREATE INDEX IF NOT EXISTS idx_project_scheduled_task_runs_task_id ON project_scheduled_task_runs(task_id);
         CREATE INDEX IF NOT EXISTS idx_project_scheduled_task_runs_project_id ON project_scheduled_task_runs(project_id);
         CREATE INDEX IF NOT EXISTS idx_project_frankenphp_octane_workers_status ON project_frankenphp_octane_workers(status);
+        CREATE INDEX IF NOT EXISTS idx_project_frankenphp_workers_status ON project_frankenphp_workers(status);
+        CREATE INDEX IF NOT EXISTS idx_project_frankenphp_workers_mode ON project_frankenphp_workers(mode);
 
         INSERT OR IGNORE INTO schema_migrations (version, applied_at)
         VALUES ('0001_initial_schema', CURRENT_TIMESTAMP);
@@ -255,6 +276,7 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
     migrate_frankenphp_runtime_support(&connection)?;
     migrate_repair_project_foreign_keys(&connection)?;
     migrate_frankenphp_octane_workers(&connection)?;
+    migrate_frankenphp_worker_framework_expansion(&connection)?;
     ServiceRepository::seed_defaults(&connection)?;
 
     Ok(())
@@ -306,6 +328,141 @@ fn migrate_frankenphp_octane_workers(connection: &Connection) -> Result<(), AppE
         ",
         params![MIGRATION],
     )?;
+
+    Ok(())
+}
+
+fn migrate_frankenphp_worker_framework_expansion(connection: &Connection) -> Result<(), AppError> {
+    const MIGRATION: &str = "0010_frankenphp_worker_framework_expansion";
+    if migration_applied(connection, MIGRATION)? {
+        return Ok(());
+    }
+
+    let projects_sql = connection
+        .query_row(
+            "
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'projects'
+            ",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let projects_support_new_modes = projects_sql
+        .as_deref()
+        .map(|sql| sql.contains("'symfony'") && sql.contains("'custom'"))
+        .unwrap_or(false);
+
+    if !projects_support_new_modes {
+        let rebuild_result = connection.execute_batch(
+            "
+            PRAGMA foreign_keys = OFF;
+            PRAGMA legacy_alter_table = ON;
+
+            BEGIN;
+
+            ALTER TABLE projects RENAME TO projects_phase24_legacy;
+
+            CREATE TABLE projects (
+              id TEXT PRIMARY KEY NOT NULL,
+              name TEXT NOT NULL,
+              path TEXT NOT NULL UNIQUE,
+              domain TEXT NOT NULL UNIQUE,
+              server_type TEXT NOT NULL CHECK(server_type IN ('apache', 'nginx', 'frankenphp')),
+              php_version TEXT NOT NULL,
+              framework TEXT NOT NULL CHECK(framework IN ('laravel', 'symfony', 'wordpress', 'php', 'unknown')),
+              document_root TEXT NOT NULL,
+              ssl_enabled INTEGER NOT NULL DEFAULT 0,
+              database_name TEXT,
+              database_port INTEGER,
+              status TEXT NOT NULL DEFAULT 'stopped' CHECK(status IN ('running', 'stopped', 'error')),
+              frankenphp_mode TEXT NOT NULL DEFAULT 'classic' CHECK(frankenphp_mode IN ('classic', 'octane', 'symfony', 'custom')),
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            INSERT INTO projects (
+              id, name, path, domain, server_type, php_version, framework, document_root,
+              ssl_enabled, database_name, database_port, status, frankenphp_mode, created_at, updated_at
+            )
+            SELECT
+              id, name, path, domain, server_type, php_version, framework, document_root,
+              ssl_enabled, database_name, database_port, status,
+              CASE WHEN frankenphp_mode IN ('classic', 'octane', 'symfony', 'custom')
+                THEN frankenphp_mode
+                ELSE 'classic'
+              END,
+              created_at, updated_at
+            FROM projects_phase24_legacy;
+
+            DROP TABLE projects_phase24_legacy;
+            CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path);
+            CREATE INDEX IF NOT EXISTS idx_projects_domain ON projects(domain);
+
+            COMMIT;
+            ",
+        );
+
+        if let Err(error) = rebuild_result {
+            let _ = connection.execute_batch(
+                "
+                ROLLBACK;
+                PRAGMA legacy_alter_table = OFF;
+                PRAGMA foreign_keys = ON;
+                ",
+            );
+            return Err(error.into());
+        }
+
+        connection.execute_batch(
+            "
+            PRAGMA legacy_alter_table = OFF;
+            PRAGMA foreign_keys = ON;
+            ",
+        )?;
+    }
+
+    connection.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS project_frankenphp_workers (
+          project_id TEXT PRIMARY KEY NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'octane' CHECK(mode IN ('octane', 'symfony', 'custom')),
+          worker_port INTEGER NOT NULL,
+          admin_port INTEGER NOT NULL,
+          workers INTEGER NOT NULL DEFAULT 1,
+          max_requests INTEGER NOT NULL DEFAULT 500,
+          status TEXT NOT NULL DEFAULT 'stopped' CHECK(status IN ('running', 'stopped', 'error', 'starting', 'restarting')),
+          pid INTEGER,
+          last_started_at TEXT,
+          last_stopped_at TEXT,
+          last_error TEXT,
+          log_path TEXT NOT NULL,
+          custom_worker_relative_path TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        INSERT OR IGNORE INTO project_frankenphp_workers (
+          project_id, mode, worker_port, admin_port, workers, max_requests, status, pid,
+          last_started_at, last_stopped_at, last_error, log_path, custom_worker_relative_path,
+          created_at, updated_at
+        )
+        SELECT
+          project_id, 'octane', worker_port, admin_port, workers, max_requests, status, pid,
+          last_started_at, last_stopped_at, last_error, log_path, NULL, created_at, updated_at
+        FROM project_frankenphp_octane_workers;
+
+        CREATE INDEX IF NOT EXISTS idx_project_frankenphp_workers_status
+        ON project_frankenphp_workers(status);
+
+        CREATE INDEX IF NOT EXISTS idx_project_frankenphp_workers_mode
+        ON project_frankenphp_workers(mode);
+        ",
+    )?;
+
+    record_migration(connection, MIGRATION)?;
 
     Ok(())
 }

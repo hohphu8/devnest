@@ -1,7 +1,7 @@
 export type ServerType = "apache" | "nginx" | "frankenphp";
-export type FrameworkType = "laravel" | "wordpress" | "php" | "unknown";
+export type FrameworkType = "laravel" | "symfony" | "wordpress" | "php" | "unknown";
 export type ProjectStatus = "running" | "stopped" | "error";
-export type FrankenphpMode = "classic" | "octane";
+export type FrankenphpMode = "classic" | "octane" | "symfony" | "custom";
 
 export interface Project {
   id: string;

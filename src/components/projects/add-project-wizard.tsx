@@ -689,15 +689,6 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
                       </option>
                     ))}
                   </select>
-                  {form.serverType === "frankenphp" ? (
-                    <span className="helper-text">
-                      {activeFrankenphpPhpFamily
-                        ? `Active FrankenPHP embeds PHP ${activeFrankenphpPhpFamily}. DevNest keeps this project synced to that embedded PHP family; switch the active FrankenPHP runtime in Settings to change it.`
-                        : trackedFrankenphpPhpFamilies.length > 0
-                          ? "FrankenPHP does not need a standalone PHP runtime. Pick the embedded PHP family you want, then activate a matching FrankenPHP runtime in Settings."
-                          : "FrankenPHP does not need a standalone PHP runtime. Install or link FrankenPHP first, then DevNest will sync this project to its embedded PHP family."}
-                    </span>
-                  ) : null}
                 </div>
                 <div className="field">
                   <label htmlFor="wizard-framework">Framework</label>
@@ -713,6 +704,7 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
                     value={form.framework}
                   >
                     <option value="laravel">Laravel</option>
+                    <option value="symfony">Symfony</option>
                     <option value="wordpress">WordPress</option>
                     <option value="php">PHP</option>
                     <option value="unknown">Unknown</option>
@@ -758,14 +750,23 @@ export function AddProjectWizard({ open, recentPaths, onClose, onCreated }: AddP
               </div>
 
               {form.serverType === "frankenphp" ? (
-                <div className="inline-note-card" data-tone="warning">
-                  <strong>Experimental web server</strong>
-                  <span>
+                <>
+                  <span className="helper-text">
                     {activeFrankenphpPhpFamily
-                      ? `FrankenPHP runs with its own embedded PHP runtime on Windows. This project is pinned to the active FrankenPHP PHP ${activeFrankenphpPhpFamily} family.`
-                      : "FrankenPHP runs with its own embedded PHP runtime on Windows. No separate PHP install is required, but DevNest still validates the embedded PHP family before start."}
+                      ? `Active FrankenPHP embeds PHP ${activeFrankenphpPhpFamily}. DevNest keeps this project synced to that embedded PHP family; switch the active FrankenPHP runtime in Settings to change it.`
+                      : trackedFrankenphpPhpFamilies.length > 0
+                        ? "FrankenPHP does not need a standalone PHP runtime. Pick the embedded PHP family you want, then activate a matching FrankenPHP runtime in Settings."
+                        : "FrankenPHP does not need a standalone PHP runtime. Install or link FrankenPHP first, then DevNest will sync this project to its embedded PHP family."}
                   </span>
-                </div>
+                  <div className="inline-note-card" data-tone="warning">
+                    <strong>Experimental web server</strong>
+                    <span>
+                      {activeFrankenphpPhpFamily
+                        ? `FrankenPHP runs with its own embedded PHP runtime on Windows. This project is pinned to the active FrankenPHP PHP ${activeFrankenphpPhpFamily} family.`
+                        : "FrankenPHP runs with its own embedded PHP runtime on Windows. No separate PHP install is required, but DevNest still validates the embedded PHP family before start."}
+                    </span>
+                  </div>
+                </>
               ) : null}
 
               <label className="checkbox-row">

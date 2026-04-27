@@ -407,14 +407,36 @@ fn validate_frankenphp_mode(
     framework: &FrameworkType,
     mode: FrankenphpMode,
 ) -> Result<FrankenphpMode, AppError> {
-    if matches!(mode, FrankenphpMode::Octane)
-        && (!matches!(server_type, ServerType::Frankenphp)
-            || !matches!(framework, FrameworkType::Laravel))
-    {
-        return Err(AppError::new_validation(
-            "INVALID_FRANKENPHP_MODE",
-            "Laravel Octane Worker mode is only available for Laravel projects using FrankenPHP.",
-        ));
+    match mode {
+        FrankenphpMode::Classic => {}
+        FrankenphpMode::Octane => {
+            if !matches!(server_type, ServerType::Frankenphp)
+                || !matches!(framework, FrameworkType::Laravel)
+            {
+                return Err(AppError::new_validation(
+                    "INVALID_FRANKENPHP_MODE",
+                    "Laravel Octane Worker mode is only available for Laravel projects using FrankenPHP.",
+                ));
+            }
+        }
+        FrankenphpMode::Symfony => {
+            if !matches!(server_type, ServerType::Frankenphp)
+                || !matches!(framework, FrameworkType::Symfony)
+            {
+                return Err(AppError::new_validation(
+                    "INVALID_FRANKENPHP_MODE",
+                    "Symfony Worker mode is only available for Symfony projects using FrankenPHP.",
+                ));
+            }
+        }
+        FrankenphpMode::Custom => {
+            if !matches!(server_type, ServerType::Frankenphp) {
+                return Err(AppError::new_validation(
+                    "INVALID_FRANKENPHP_MODE",
+                    "Custom FrankenPHP Worker mode is only available for FrankenPHP projects.",
+                ));
+            }
+        }
     }
 
     Ok(mode)
@@ -600,9 +622,7 @@ impl ProjectRepository {
             &server_type,
             &framework,
             patch.frankenphp_mode.unwrap_or_else(|| {
-                if matches!(server_type, ServerType::Frankenphp)
-                    && matches!(framework, FrameworkType::Laravel)
-                {
+                if matches!(server_type, ServerType::Frankenphp) {
                     current.frankenphp_mode.clone()
                 } else {
                     FrankenphpMode::Classic

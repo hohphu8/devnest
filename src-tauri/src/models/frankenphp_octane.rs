@@ -1,3 +1,4 @@
+use crate::models::project::FrankenphpMode;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -42,6 +43,7 @@ impl FromStr for FrankenphpOctaneWorkerStatus {
 #[serde(rename_all = "camelCase")]
 pub struct FrankenphpOctaneWorkerSettings {
     pub project_id: String,
+    pub mode: FrankenphpMode,
     pub worker_port: i64,
     pub admin_port: i64,
     pub workers: i64,
@@ -52,6 +54,7 @@ pub struct FrankenphpOctaneWorkerSettings {
     pub last_stopped_at: Option<String>,
     pub last_error: Option<String>,
     pub log_path: String,
+    pub custom_worker_relative_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -79,6 +82,7 @@ pub struct FrankenphpRuntimeHealth {
 #[serde(rename_all = "camelCase")]
 pub struct FrankenphpOctaneWorkerHealth {
     pub project_id: String,
+    pub mode: FrankenphpMode,
     pub status: FrankenphpOctaneWorkerStatus,
     pub pid: Option<i64>,
     pub uptime_seconds: Option<i64>,
@@ -99,10 +103,12 @@ pub struct FrankenphpOctaneWorkerHealth {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateFrankenphpOctaneWorkerSettingsInput {
+    pub mode: Option<FrankenphpMode>,
     pub worker_port: Option<i64>,
     pub admin_port: Option<i64>,
     pub workers: Option<i64>,
     pub max_requests: Option<i64>,
+    pub custom_worker_relative_path: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -128,6 +134,7 @@ pub struct FrankenphpOctanePreflightCheck {
 #[serde(rename_all = "camelCase")]
 pub struct FrankenphpOctanePreflight {
     pub project_id: String,
+    pub mode: FrankenphpMode,
     pub ready: bool,
     pub summary: String,
     pub install_commands: Vec<String>,

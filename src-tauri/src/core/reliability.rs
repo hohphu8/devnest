@@ -84,15 +84,16 @@ fn octane_worker_port_for_config(
     state: &AppState,
     project: &Project,
 ) -> Result<Option<i64>, AppError> {
-    if !matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+    if matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
         return Ok(None);
     }
 
     Ok(Some(
-        FrankenphpOctaneWorkerRepository::get_or_create(
+        FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
             connection,
             &state.workspace_dir,
             &project.id,
+            project.frankenphp_mode.clone(),
         )?
         .worker_port,
     ))

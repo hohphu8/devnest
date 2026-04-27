@@ -36,6 +36,7 @@ impl FromStr for ServerType {
 #[serde(rename_all = "lowercase")]
 pub enum FrameworkType {
     Laravel,
+    Symfony,
     Wordpress,
     Php,
     Unknown,
@@ -45,6 +46,7 @@ impl FrameworkType {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Laravel => "laravel",
+            Self::Symfony => "symfony",
             Self::Wordpress => "wordpress",
             Self::Php => "php",
             Self::Unknown => "unknown",
@@ -58,6 +60,7 @@ impl FromStr for FrameworkType {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "laravel" => Ok(Self::Laravel),
+            "symfony" => Ok(Self::Symfony),
             "wordpress" => Ok(Self::Wordpress),
             "php" => Ok(Self::Php),
             "unknown" => Ok(Self::Unknown),
@@ -102,6 +105,8 @@ impl FromStr for ProjectStatus {
 pub enum FrankenphpMode {
     Classic,
     Octane,
+    Symfony,
+    Custom,
 }
 
 impl FrankenphpMode {
@@ -109,6 +114,8 @@ impl FrankenphpMode {
         match self {
             Self::Classic => "classic",
             Self::Octane => "octane",
+            Self::Symfony => "symfony",
+            Self::Custom => "custom",
         }
     }
 }
@@ -120,6 +127,8 @@ impl FromStr for FrankenphpMode {
         match value {
             "classic" => Ok(Self::Classic),
             "octane" => Ok(Self::Octane),
+            "symfony" => Ok(Self::Symfony),
+            "custom" => Ok(Self::Custom),
             _ => Err("Invalid FrankenPHP mode"),
         }
     }

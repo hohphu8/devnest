@@ -90,6 +90,12 @@ fn composer_requires_package(project_path: &Path, package_name: &str) -> bool {
     })
 }
 
+fn composer_has_any_package(project_path: &Path, package_names: &[&str]) -> bool {
+    package_names
+        .iter()
+        .any(|package_name| composer_requires_package(project_path, package_name))
+}
+
 fn composer_package_name(project_path: &Path) -> Option<String> {
     read_json(&project_path.join("composer.json"))?
         .get("name")?
@@ -143,6 +149,16 @@ fn framework_extension_defaults(framework: &FrameworkType) -> &'static [&'static
             "tokenizer",
             "xml",
         ],
+        FrameworkType::Symfony => &[
+            "ctype",
+            "iconv",
+            "intl",
+            "mbstring",
+            "openssl",
+            "pdo_mysql",
+            "tokenizer",
+            "xml",
+        ],
         FrameworkType::Wordpress => &[
             "curl", "dom", "gd", "json", "mysqli", "openssl", "xml", "zip",
         ],
@@ -163,11 +179,23 @@ fn detect_framework(
         || composer_package_name(project_path)
             .map(|value| value == "laravel/laravel")
             .unwrap_or(false);
+    let symfony_package = composer_has_any_package(
+        project_path,
+        &[
+            "symfony/framework-bundle",
+            "symfony/runtime",
+            "runtime/frankenphp-symfony",
+        ],
+    );
+    let symfony_markers = project_path.join("bin").join("console").exists()
+        || project_path.join("config").join("bundles.php").exists();
 
     if (artisan && bootstrap && public_index)
         || (public_index && laravel_package && (artisan || bootstrap))
     {
         FrameworkType::Laravel
+    } else if public_index && (symfony_package || symfony_markers) {
+        FrameworkType::Symfony
     } else if wordpress_config && wordpress_content {
         FrameworkType::Wordpress
     } else if public_index || root_index {
@@ -198,9 +226,16 @@ fn recommend_server(
     }
 
     match framework {
-        FrameworkType::Laravel => (
+        FrameworkType::Laravel | FrameworkType::Symfony => (
             ServerType::Nginx,
-            Some("Laravel markers were found, so Nginx is the default recommendation.".to_string()),
+            Some(format!(
+                "{} markers were found, so Nginx is the default recommendation.",
+                if matches!(framework, FrameworkType::Laravel) {
+                    "Laravel"
+                } else {
+                    "Symfony"
+                }
+            )),
         ),
         FrameworkType::Wordpress => (
             ServerType::Apache,
@@ -223,7 +258,7 @@ fn infer_document_root(
     root_index: bool,
 ) -> (String, Option<String>) {
     match framework {
-        FrameworkType::Laravel => (
+        FrameworkType::Laravel | FrameworkType::Symfony => (
             "public".to_string(),
             Some(
                 "Found public/index.php, so DevNest will serve the public/ directory.".to_string(),
@@ -292,6 +327,8 @@ pub fn scan_project(project_path: &Path) -> Result<ScanResult, AppError> {
     }
     let root_htaccess = push_if_exists(project_path, ".htaccess", &mut detected_files);
     let public_htaccess = push_if_exists(project_path, "public/.htaccess", &mut detected_files);
+    push_if_exists(project_path, "bin/console", &mut detected_files);
+    push_if_exists(project_path, "config/bundles.php", &mut detected_files);
 
     let framework = detect_framework(
         project_path,
@@ -383,6 +420,30 @@ mod tests {
         assert_eq!(result.framework.as_str(), "wordpress");
         assert_eq!(result.recommended_server.as_str(), "apache");
         assert_eq!(result.document_root, ".");
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn detects_symfony_project() {
+        let root = make_temp_project();
+        fs::create_dir_all(root.join("bin")).expect("bin dir should be created");
+        fs::create_dir_all(root.join("config")).expect("config dir should be created");
+        fs::create_dir_all(root.join("public")).expect("public dir should be created");
+        fs::write(root.join("bin").join("console"), "").expect("bin/console should be created");
+        fs::write(root.join("config").join("bundles.php"), "<?php return [];")
+            .expect("config/bundles.php should be created");
+        fs::write(root.join("public").join("index.php"), "")
+            .expect("public index should be created");
+        fs::write(
+            root.join("composer.json"),
+            r#"{ "require": { "symfony/framework-bundle": "^7.0", "symfony/runtime": "^7.0" } }"#,
+        )
+        .expect("composer.json should be created");
+
+        let result = scan_project(&root).expect("scan should succeed");
+        assert_eq!(result.framework.as_str(), "symfony");
+        assert_eq!(result.recommended_server.as_str(), "nginx");
+        assert_eq!(result.document_root, "public");
         fs::remove_dir_all(root).ok();
     }
 

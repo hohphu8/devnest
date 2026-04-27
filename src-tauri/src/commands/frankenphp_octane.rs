@@ -47,7 +47,7 @@ pub fn update_project_frankenphp_worker_settings(
         input,
     )?;
     let project = ProjectRepository::get(&connection, &project_id)?;
-    if matches!(project.frankenphp_mode, FrankenphpMode::Octane) {
+    if !matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
         service_manager::sync_managed_configs_for_service(
             &connection,
             &state,
@@ -60,6 +60,15 @@ pub fn update_project_frankenphp_worker_settings(
 
 #[tauri::command]
 pub fn get_project_frankenphp_octane_preflight(
+    project_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<FrankenphpOctanePreflight, AppError> {
+    let connection = connection_from_state(&state)?;
+    frankenphp_octane_manager::preflight(&connection, &state, &project_id)
+}
+
+#[tauri::command]
+pub fn get_project_frankenphp_worker_preflight(
     project_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<FrankenphpOctanePreflight, AppError> {

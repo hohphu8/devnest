@@ -1633,7 +1633,7 @@ fn build_nginx_bootstrap_config(
          error_log stderr warn;\n\
          pid \"{pid_path}\";\n\n\
          events {{\n    worker_connections  {worker_connections};\n}}\n\n\
-         http {{\n    include       \"{mime_types}\";\n    default_type  application/octet-stream;\n    sendfile        on;\n    send_timeout  {timeout};\n    keepalive_timeout  {keep_alive_timeout};\n    keepalive_requests  {keep_alive_requests};\n    access_log off;\n    include \"{include_glob}\";\n\n    server {{\n        listen       {port} default_server;\n        server_name  localhost;\n        root   \"{html_root}\";\n        index  index.html index.htm;\n\n        location / {{\n            try_files $uri $uri/ =404;\n        }}\n    }}\n}}\n",
+         http {{\n    include       \"{mime_types}\";\n    default_type  application/octet-stream;\n    server_names_hash_bucket_size 128;\n    server_names_hash_max_size 2048;\n    sendfile        on;\n    send_timeout  {timeout};\n    keepalive_timeout  {keep_alive_timeout};\n    keepalive_requests  {keep_alive_requests};\n    access_log off;\n    include \"{include_glob}\";\n\n    server {{\n        listen       {port} default_server;\n        server_name  localhost;\n        root   \"{html_root}\";\n        index  index.html index.htm;\n\n        location / {{\n            try_files $uri $uri/ =404;\n        }}\n    }}\n}}\n",
         worker_processes = runtime_config.worker_processes,
         worker_connections = runtime_config.worker_connections,
         pid_path = pid_path,
@@ -2308,6 +2308,8 @@ mod tests {
         assert_eq!(runtime.working_dir.as_deref(), Some(runtime_home.as_path()));
         assert!(config_content.contains("daemon off;"));
         assert!(config_content.contains("master_process off;"));
+        assert!(config_content.contains("server_names_hash_bucket_size 128;"));
+        assert!(config_content.contains("server_names_hash_max_size 2048;"));
         assert!(config_content.contains("include"));
         assert!(
             workspace_dir

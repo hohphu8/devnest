@@ -107,7 +107,7 @@ use crate::commands::ssl::{
 use crate::commands::tunnels::{
     get_project_tunnel_state, open_project_tunnel_url, start_project_tunnel, stop_project_tunnel,
 };
-use crate::commands::workspace::get_workspace_overview;
+use crate::commands::workspace::{get_workspace_overview, get_workspace_port_summary};
 use crate::core::{
     frankenphp_octane_manager, php_cli_environment, runtime_registry, scheduled_task_manager,
     service_manager, worker_manager,
@@ -127,9 +127,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 const MAIN_WINDOW_LABEL: &str = "main";
+const BOOT_BACKGROUND_COMPLETE_EVENT: &str = "devnest:boot-background-complete";
 
 fn boot_timestamp() -> String {
     let now = SystemTime::now()
@@ -252,6 +253,7 @@ fn start_background_boot_tasks<R: tauri::Runtime>(app_handle: tauri::AppHandle<R
                         error
                     );
                     start_scheduled_task_scheduler(&state);
+                    let _ = app_handle.emit(BOOT_BACKGROUND_COMPLETE_EVENT, ());
                     return;
                 }
             };
@@ -273,6 +275,7 @@ fn start_background_boot_tasks<R: tauri::Runtime>(app_handle: tauri::AppHandle<R
             perf::log_elapsed("boot background scheduled task resume", phase_started_at);
 
             start_scheduled_task_scheduler(&state);
+            let _ = app_handle.emit(BOOT_BACKGROUND_COMPLETE_EVENT, ());
             perf::log_elapsed("boot background total", started_at);
         });
 }
@@ -386,6 +389,7 @@ pub fn run() {
             ping,
             get_boot_state,
             get_workspace_overview,
+            get_workspace_port_summary,
             get_app_release_info,
             check_for_app_update,
             install_app_update,

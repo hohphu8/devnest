@@ -13,7 +13,9 @@ use crate::storage::repositories::{
     OptionalToolVersionRepository, ProjectPersistentHostnameRepository, ProjectRepository,
     RuntimeVersionRepository, ServiceRepository,
 };
-use crate::utils::process::{configure_background_command, is_process_running, kill_process_tree};
+use crate::utils::process::{
+    configure_background_command, is_process_running, kill_process_tree, running_process_ids,
+};
 use rusqlite::Connection;
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
@@ -764,14 +766,118 @@ pub fn get_all_service_status(
     connection: &Connection,
     state: &AppState,
 ) -> Result<Vec<ServiceState>, AppError> {
-    let services = ServiceRepository::list(connection)?;
-    let mut synchronized = Vec::with_capacity(services.len());
-
-    for service in services {
-        synchronized.push(get_service_status(connection, state, service.name)?);
+    enum SynchronizedService {
+        Ready(ServiceState),
+        PendingPidCheck {
+            service: ServiceName,
+            expected_port: Option<i64>,
+            pid: u32,
+        },
     }
 
-    Ok(synchronized)
+    let services = ServiceRepository::list(connection)?;
+    let mut synchronized = Vec::with_capacity(services.len());
+    let mut persisted_pids = Vec::new();
+
+    for current in services {
+        let service = current.name.clone();
+        let expected_port = current
+            .port
+            .or_else(|| service.default_port().map(i64::from));
+
+        let sync_result = sync_tracked_process(state, &service)?;
+        if let Some(pid) = sync_result.running_pid {
+            synchronized.push(SynchronizedService::Ready(save_running_state(
+                connection,
+                &service,
+                pid,
+                expected_port.map(|value| value as u16),
+            )?));
+            continue;
+        }
+
+        if sync_result.exited {
+            if sync_result.exit_success {
+                synchronized.push(SynchronizedService::Ready(save_stopped_state(
+                    connection,
+                    &service,
+                    expected_port.map(|value| value as u16),
+                )?));
+            } else {
+                synchronized.push(SynchronizedService::Ready(save_error_state(
+                    connection,
+                    &service,
+                    expected_port.map(|value| value as u16),
+                    sync_result
+                        .exit_message
+                        .as_deref()
+                        .unwrap_or("The service stopped unexpectedly."),
+                )?));
+            }
+            continue;
+        }
+
+        if let Some(pid) = current.pid.and_then(|value| u32::try_from(value).ok()) {
+            persisted_pids.push(pid);
+            synchronized.push(SynchronizedService::PendingPidCheck {
+                service,
+                expected_port,
+                pid,
+            });
+            continue;
+        }
+
+        if current.pid.is_some() {
+            synchronized.push(SynchronizedService::Ready(save_stopped_state(
+                connection,
+                &service,
+                expected_port.map(|value| value as u16),
+            )?));
+            continue;
+        }
+
+        if current.port.is_none() {
+            synchronized.push(SynchronizedService::Ready(ServiceRepository::save_state(
+                connection,
+                &service,
+                &current.status,
+                None,
+                expected_port,
+                current.last_error.as_deref(),
+            )?));
+            continue;
+        }
+
+        synchronized.push(SynchronizedService::Ready(current));
+    }
+
+    let running_pids = running_process_ids(&persisted_pids)?;
+    synchronized
+        .into_iter()
+        .map(|service| match service {
+            SynchronizedService::Ready(service) => Ok(service),
+            SynchronizedService::PendingPidCheck {
+                service,
+                expected_port,
+                pid,
+            } => {
+                if running_pids.contains(&pid) {
+                    save_running_state(
+                        connection,
+                        &service,
+                        pid,
+                        expected_port.map(|value| value as u16),
+                    )
+                } else {
+                    save_stopped_state(
+                        connection,
+                        &service,
+                        expected_port.map(|value| value as u16),
+                    )
+                }
+            }
+        })
+        .collect()
 }
 
 pub fn start_service(

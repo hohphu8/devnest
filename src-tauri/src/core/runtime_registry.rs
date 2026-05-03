@@ -831,9 +831,10 @@ fn build_php_fastcgi_config(
     version: &str,
     runtime_id: Option<&str>,
 ) -> Result<PathBuf, AppError> {
-    let state_dir = managed_php_state_dir(workspace_dir, version);
+    let php_family = runtime_version_family(version);
+    let state_dir = managed_php_state_dir(workspace_dir, &php_family);
     let error_log_path = service_log_path(workspace_dir, &ServiceName::Apache)
-        .with_file_name(format!("php-{version}.log"));
+        .with_file_name(format!("php-{php_family}.log"));
     let available_extensions = available_php_extensions(runtime_home);
 
     build_php_runtime_config(
@@ -841,7 +842,7 @@ fn build_php_fastcgi_config(
         runtime_home,
         &state_dir,
         &error_log_path,
-        version,
+        &php_family,
         runtime_id,
         &available_extensions,
         None,
@@ -2367,6 +2368,7 @@ mod tests {
         let config_path = PathBuf::from(&runtime_command.args[3]);
         let config_content = fs::read_to_string(&config_path).expect("php.ini should exist");
 
+        assert!(config_path.ends_with(PathBuf::from("php").join("8.4").join("php.ini")));
         assert!(config_content.contains("memory_limit=768M"));
         assert!(config_content.contains("display_errors=Off"));
         assert!(config_content.contains("date.timezone=Asia/Ho_Chi_Minh"));
@@ -2566,6 +2568,7 @@ mod tests {
 
         assert_eq!(runtime.port, Some(9084));
         assert_eq!(runtime.binary_path, php_cgi_binary);
+        assert!(config_path.ends_with(PathBuf::from("php").join("8.4").join("php.ini")));
         assert!(config_content.contains("extension=php_mbstring.dll"));
         assert!(config_content.contains("extension=php_pdo_mysql.dll"));
 

@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use std::collections::{BTreeSet, HashMap};
 use std::process::{Command, Output};
 
 #[cfg(windows)]
@@ -116,23 +117,112 @@ pub fn run_powershell(script: &str) -> Result<String, AppError> {
 }
 
 pub fn is_process_running(pid: u32) -> Result<bool, AppError> {
-    let output = run_powershell(&format!(
-        "if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ 'running' }}"
-    ))?;
-
-    Ok(output == "running")
+    Ok(running_process_ids(&[pid])?.contains(&pid))
 }
 
-pub fn process_name(pid: u32) -> Result<Option<String>, AppError> {
-    let output = run_powershell(&format!(
-        "$proc = Get-Process -Id {pid} -ErrorAction SilentlyContinue; if ($proc) {{ $proc.ProcessName }}"
-    ))?;
+fn parse_csv_row(line: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+    let mut in_quotes = false;
 
-    if output.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(output))
+    while let Some(character) = chars.next() {
+        match character {
+            '"' if in_quotes && matches!(chars.peek(), Some('"')) => {
+                current.push('"');
+                chars.next();
+            }
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                values.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(character),
+        }
     }
+
+    values.push(current.trim().to_string());
+    values
+}
+
+fn normalize_tasklist_process_name(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("INFO:") {
+        return None;
+    }
+
+    Some(
+        trimmed
+            .strip_suffix(".exe")
+            .or_else(|| trimmed.strip_suffix(".EXE"))
+            .unwrap_or(trimmed)
+            .to_string(),
+    )
+}
+
+fn parse_tasklist_process_snapshot(
+    output: &str,
+    requested_pids: &BTreeSet<u32>,
+) -> HashMap<u32, Option<String>> {
+    let mut processes = requested_pids
+        .iter()
+        .copied()
+        .map(|pid| (pid, None))
+        .collect::<HashMap<_, _>>();
+
+    for line in output.lines() {
+        let columns = parse_csv_row(line);
+        if columns.len() < 2 {
+            continue;
+        }
+
+        let Ok(pid) = columns[1].trim().parse::<u32>() else {
+            continue;
+        };
+        if !requested_pids.contains(&pid) {
+            continue;
+        }
+
+        processes.insert(pid, normalize_tasklist_process_name(&columns[0]));
+    }
+
+    processes
+}
+
+fn run_tasklist_output() -> Result<String, AppError> {
+    let args = vec!["/FO".to_string(), "CSV".to_string(), "/NH".to_string()];
+    let output = run_command("tasklist", &args)?;
+
+    if !output.status.success() {
+        return Err(AppError::with_details(
+            "PROCESS_LOOKUP_FAILED",
+            "Could not inspect running processes.",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+pub fn process_names(pids: &[u32]) -> Result<HashMap<u32, Option<String>>, AppError> {
+    let requested_pids = pids.iter().copied().collect::<BTreeSet<_>>();
+    if requested_pids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let output = match run_tasklist_output() {
+        Ok(output) => output,
+        Err(_) => return Ok(parse_tasklist_process_snapshot("", &requested_pids)),
+    };
+
+    Ok(parse_tasklist_process_snapshot(&output, &requested_pids))
+}
+
+pub fn running_process_ids(pids: &[u32]) -> Result<BTreeSet<u32>, AppError> {
+    Ok(process_names(pids)?
+        .into_iter()
+        .filter_map(|(pid, process_name)| process_name.map(|_| pid))
+        .collect())
 }
 
 pub fn find_process_ids_by_commandline(
@@ -174,4 +264,29 @@ pub fn kill_process_tree(pid: u32) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tasklist_process_snapshot;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn parses_tasklist_process_snapshot_rows() {
+        let requested = BTreeSet::from([101, 202, 303]);
+        let parsed = parse_tasklist_process_snapshot(
+            "\"nginx.exe\",\"101\",\"Console\",\"1\",\"10,000 K\"\r\n\"php-cgi.exe\",\"202\",\"Console\",\"1\",\"9,000 K\"\n",
+            &requested,
+        );
+
+        assert_eq!(
+            parsed.get(&101).and_then(Clone::clone).as_deref(),
+            Some("nginx")
+        );
+        assert_eq!(
+            parsed.get(&202).and_then(Clone::clone).as_deref(),
+            Some("php-cgi")
+        );
+        assert_eq!(parsed.get(&303).and_then(Clone::clone), None);
+    }
 }

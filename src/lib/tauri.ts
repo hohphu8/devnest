@@ -2324,6 +2324,18 @@ function buildMockWorkspaceOverview(): WorkspaceOverviewPayload {
   const services = readMockServices();
   const workers = readMockProjectWorkers();
   const scheduledTasks = readMockProjectScheduledTasks();
+  return {
+    bootState: buildMockBootState(),
+    projects,
+    services,
+    workers,
+    scheduledTasks,
+    portSummary: [],
+  };
+}
+
+function buildMockWorkspacePortSummary(): WorkspaceOverviewPayload["portSummary"] {
+  const services = readMockServices();
   const portSummary = Array.from(
     new Set(
       services
@@ -2345,14 +2357,7 @@ function buildMockWorkspaceOverview(): WorkspaceOverviewPayload {
     };
   });
 
-  return {
-    bootState: buildMockBootState(),
-    projects,
-    services,
-    workers,
-    scheduledTasks,
-    portSummary,
-  };
+  return portSummary;
 }
 
 function inferFrameworkFromPath(path: string): ScanResult {
@@ -2977,6 +2982,8 @@ function getMockResponse<T>(command: string): T {
       return buildMockBootState() as T;
     case "get_workspace_overview":
       return buildMockWorkspaceOverview() as T;
+    case "get_workspace_port_summary":
+      return buildMockWorkspacePortSummary() as T;
     case "ping":
       return "pong:browser" as T;
     case "get_app_release_info":

@@ -1,39 +1,23 @@
 use crate::core::{ports, scheduled_task_manager, service_manager, worker_manager};
 use crate::error::AppError;
-use crate::models::service::ServiceStatus;
+use crate::models::service::{ServiceState, ServiceStatus};
 use crate::models::workspace::{WorkspaceOverviewPayload, WorkspacePortStatus};
 use crate::state::{AppState, BootState};
 use crate::storage::repositories::ProjectRepository;
 use crate::utils::perf;
 use rusqlite::Connection;
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn connection_from_state(state: &AppState) -> Result<Connection, AppError> {
     Ok(Connection::open(&state.db_path)?)
 }
 
-#[tauri::command]
-pub fn get_workspace_overview(
-    state: tauri::State<'_, AppState>,
-) -> Result<WorkspaceOverviewPayload, AppError> {
-    let started_at = Instant::now();
-    let connection = connection_from_state(&state)?;
-    let phase_started_at = Instant::now();
-    let projects = ProjectRepository::list(&connection)?;
-    perf::log_elapsed("workspace overview projects", phase_started_at);
-    let phase_started_at = Instant::now();
-    let services = service_manager::get_all_service_status(&connection, &state)?;
-    perf::log_elapsed("workspace overview services", phase_started_at);
-    let phase_started_at = Instant::now();
-    let workers = worker_manager::list_all_workers(&connection, &state)?;
-    perf::log_elapsed("workspace overview workers", phase_started_at);
-    let phase_started_at = Instant::now();
-    let scheduled_tasks = scheduled_task_manager::list_all_scheduled_tasks(&connection, &state)?;
-    perf::log_elapsed("workspace overview scheduled tasks", phase_started_at);
-
+fn build_workspace_port_summary(
+    services: &[ServiceState],
+) -> Result<Vec<WorkspacePortStatus>, AppError> {
     let mut expected_services_by_port = BTreeMap::<u16, Vec<_>>::new();
-    for service in &services {
+    for service in services {
         let Some(port) = service
             .port
             .and_then(|value| u16::try_from(value).ok())
@@ -55,10 +39,10 @@ pub fn get_workspace_overview(
         .into_iter()
         .collect::<Vec<_>>();
     let phase_started_at = Instant::now();
-    let port_checks = ports::check_ports(&known_ports)?;
-    perf::log_elapsed("workspace overview ports", phase_started_at);
+    let port_checks = ports::check_ports_cached(&known_ports, Duration::from_secs(2))?;
+    perf::log_elapsed("workspace port summary ports", phase_started_at);
 
-    let port_summary = port_checks
+    Ok(port_checks
         .into_iter()
         .map(|check| {
             let managed_owner = services
@@ -82,7 +66,27 @@ pub fn get_workspace_overview(
                     .unwrap_or_default(),
             }
         })
-        .collect();
+        .collect())
+}
+
+#[tauri::command]
+pub fn get_workspace_overview(
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceOverviewPayload, AppError> {
+    let started_at = Instant::now();
+    let connection = connection_from_state(&state)?;
+    let phase_started_at = Instant::now();
+    let projects = ProjectRepository::list(&connection)?;
+    perf::log_elapsed("workspace overview projects", phase_started_at);
+    let phase_started_at = Instant::now();
+    let services = service_manager::get_all_service_status(&connection, &state)?;
+    perf::log_elapsed("workspace overview services", phase_started_at);
+    let phase_started_at = Instant::now();
+    let workers = worker_manager::list_all_workers(&connection, &state)?;
+    perf::log_elapsed("workspace overview workers", phase_started_at);
+    let phase_started_at = Instant::now();
+    let scheduled_tasks = scheduled_task_manager::list_all_scheduled_tasks(&connection, &state)?;
+    perf::log_elapsed("workspace overview scheduled tasks", phase_started_at);
 
     let payload = WorkspaceOverviewPayload {
         boot_state: BootState {
@@ -95,9 +99,21 @@ pub fn get_workspace_overview(
         services,
         workers,
         scheduled_tasks,
-        port_summary,
+        port_summary: Vec::new(),
     };
     perf::log_elapsed("workspace overview total", started_at);
 
     Ok(payload)
+}
+
+#[tauri::command]
+pub fn get_workspace_port_summary(
+    service_snapshot: Vec<ServiceState>,
+    _state: tauri::State<'_, AppState>,
+) -> Result<Vec<WorkspacePortStatus>, AppError> {
+    let started_at = Instant::now();
+    let port_summary = build_workspace_port_summary(&service_snapshot)?;
+    perf::log_elapsed("workspace port summary total", started_at);
+
+    Ok(port_summary)
 }

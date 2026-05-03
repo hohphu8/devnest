@@ -656,6 +656,7 @@ function DashboardRoute() {
   const pushToast = useToastStore((state) => state.push);
   const overview = useWorkspaceStore((state) => state.overview);
   const workspaceLoading = useWorkspaceStore((state) => state.loading);
+  const portSummaryLoading = useWorkspaceStore((state) => state.portSummaryLoading);
   const workspaceError = useWorkspaceStore((state) => state.error);
   const refreshOverview = useWorkspaceStore((state) => state.refreshOverview);
   const projects = useProjectStore((state) => state.projects);
@@ -677,7 +678,7 @@ function DashboardRoute() {
       overview?.portSummary.filter((port) => !port.available && !port.managedOwner).length ?? 0,
     [overview],
   );
-  const portHealthLoading = workspaceLoading && !overview;
+  const portHealthLoading = (workspaceLoading && !overview) || portSummaryLoading;
 
   const projectIssueCounts = useMemo(
     () =>

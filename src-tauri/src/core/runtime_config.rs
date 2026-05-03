@@ -84,7 +84,10 @@ fn error_reporting_options() -> Vec<RuntimeConfigFieldOption> {
 
 fn config_path_for_runtime(runtime: &RuntimeVersion, workspace_dir: &Path) -> PathBuf {
     match runtime.runtime_type {
-        RuntimeType::Php => managed_php_state_dir(workspace_dir, &runtime.version).join("php.ini"),
+        RuntimeType::Php => {
+            managed_php_state_dir(workspace_dir, &php_state_version(&runtime.version))
+                .join("php.ini")
+        }
         RuntimeType::Apache => {
             managed_service_state_dir(workspace_dir, &ServiceName::Apache).join("httpd.conf")
         }
@@ -97,6 +100,18 @@ fn config_path_for_runtime(runtime: &RuntimeVersion, workspace_dir: &Path) -> Pa
         RuntimeType::Mysql => {
             managed_service_state_dir(workspace_dir, &ServiceName::Mysql).join("my.ini")
         }
+    }
+}
+
+fn php_state_version(version: &str) -> String {
+    let mut parts = version.trim().split('.');
+    let major = parts.next().unwrap_or_default();
+    let minor = parts.next().unwrap_or_default();
+
+    if major.is_empty() || minor.is_empty() {
+        version.trim().to_string()
+    } else {
+        format!("{major}.{minor}")
     }
 }
 
@@ -1180,4 +1195,40 @@ fn load_nginx_runtime_config_from_values(
             1,
         )?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_path_for_runtime;
+    use crate::models::runtime::{RuntimeType, RuntimeVersion};
+    use std::path::Path;
+
+    fn runtime(runtime_type: RuntimeType, version: &str) -> RuntimeVersion {
+        RuntimeVersion {
+            id: format!("{}-{version}", runtime_type.as_str()),
+            runtime_type,
+            version: version.to_string(),
+            path: "runtime.exe".to_string(),
+            is_active: true,
+            created_at: "2026-05-03T00:00:00Z".to_string(),
+            updated_at: "2026-05-03T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn php_runtime_config_path_uses_version_family() {
+        let path = config_path_for_runtime(
+            &runtime(RuntimeType::Php, "8.4.20"),
+            Path::new(r"C:\DevNest"),
+        );
+
+        assert!(
+            path.ends_with(
+                Path::new("service-state")
+                    .join("php")
+                    .join("8.4")
+                    .join("php.ini")
+            )
+        );
+    }
 }

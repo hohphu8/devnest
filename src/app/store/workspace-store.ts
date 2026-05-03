@@ -6,18 +6,26 @@ import { useProjectStore } from "@/app/store/project-store";
 import { useServiceStore } from "@/app/store/service-store";
 import { workspaceApi } from "@/lib/api/workspace-api";
 import { getAppErrorMessage } from "@/lib/tauri";
-import type { WorkspaceOverviewPayload } from "@/types/workspace";
+import type { WorkspaceOverviewPayload, WorkspacePortStatus } from "@/types/workspace";
+
+interface RefreshOverviewOptions {
+  silent?: boolean;
+}
 
 interface WorkspaceStore {
   overview?: WorkspaceOverviewPayload;
   loaded: boolean;
   loading: boolean;
+  portSummaryLoading: boolean;
   error?: string;
+  portSummaryError?: string;
   loadOverview: () => Promise<WorkspaceOverviewPayload>;
-  refreshOverview: () => Promise<WorkspaceOverviewPayload>;
+  refreshOverview: (options?: RefreshOverviewOptions) => Promise<WorkspaceOverviewPayload>;
+  loadPortSummary: () => Promise<WorkspacePortStatus[]>;
 }
 
 let loadOverviewPromise: Promise<WorkspaceOverviewPayload> | undefined;
+let loadPortSummaryPromise: Promise<WorkspacePortStatus[]> | undefined;
 
 function hydrateStores(payload: WorkspaceOverviewPayload) {
   useProjectStore.getState().hydrateProjects(payload.projects);
@@ -26,11 +34,13 @@ function hydrateStores(payload: WorkspaceOverviewPayload) {
   useProjectScheduledTaskStore.getState().hydrateTasks(payload.scheduledTasks);
 }
 
-export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
+export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   overview: undefined,
   loaded: false,
   loading: false,
+  portSummaryLoading: false,
   error: undefined,
+  portSummaryError: undefined,
   loadOverview: async (): Promise<WorkspaceOverviewPayload> => {
     if (loadOverviewPromise) {
       return loadOverviewPromise;
@@ -45,8 +55,12 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
           overview,
           loaded: true,
           loading: false,
+          portSummaryLoading: overview.portSummary.length === 0,
           error: undefined,
         });
+        void get()
+          .loadPortSummary()
+          .catch(() => undefined);
         return overview;
       } catch (error) {
         const message = getAppErrorMessage(error, "Failed to load workspace overview.");
@@ -63,41 +77,84 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
 
     return loadOverviewPromise;
   },
-  refreshOverview: async (): Promise<WorkspaceOverviewPayload> => {
+  refreshOverview: async (options?: RefreshOverviewOptions): Promise<WorkspaceOverviewPayload> => {
     if (loadOverviewPromise) {
       return loadOverviewPromise;
     }
 
-    loadOverviewPromise = runAsyncAction(
-      "workspace:refresh",
-      async () => {
-        set({ loading: true, error: undefined });
-        try {
-          const overview = await workspaceApi.overview();
-          hydrateStores(overview);
-          set({
-            overview,
-            loaded: true,
-            loading: false,
-            error: undefined,
-          });
-          return overview;
-        } catch (error) {
-          const message = getAppErrorMessage(error, "Failed to refresh workspace overview.");
-          set((state) => ({
-            overview: state.overview,
-            loaded: Boolean(state.overview),
-            loading: false,
-            error: message,
-          }));
-          throw error;
-        } finally {
-          loadOverviewPromise = undefined;
-        }
-      },
-      "Refreshing workspace...",
-    );
+    const refresh = async () => {
+      set((state) => ({ loading: options?.silent ? state.loading : true, error: undefined }));
+      try {
+        const overview = await workspaceApi.overview();
+        hydrateStores(overview);
+        set((state) => ({
+          overview: {
+            ...overview,
+            portSummary:
+              state.overview?.portSummary && state.overview.portSummary.length > 0
+                ? state.overview.portSummary
+                : overview.portSummary,
+          },
+          loaded: true,
+          loading: false,
+          portSummaryLoading:
+            state.overview?.portSummary && state.overview.portSummary.length > 0
+              ? state.portSummaryLoading
+              : true,
+          error: undefined,
+        }));
+        void get()
+          .loadPortSummary()
+          .catch(() => undefined);
+        return overview;
+      } catch (error) {
+        const message = getAppErrorMessage(error, "Failed to refresh workspace overview.");
+        set((state) => ({
+          overview: state.overview,
+          loaded: Boolean(state.overview),
+          loading: false,
+          error: message,
+        }));
+        throw error;
+      } finally {
+        loadOverviewPromise = undefined;
+      }
+    };
+
+    loadOverviewPromise = options?.silent
+      ? refresh()
+      : runAsyncAction("workspace:refresh", refresh, "Refreshing workspace...");
 
     return loadOverviewPromise;
+  },
+  loadPortSummary: async (): Promise<WorkspacePortStatus[]> => {
+    if (loadPortSummaryPromise) {
+      return loadPortSummaryPromise;
+    }
+
+    set({ portSummaryLoading: true, portSummaryError: undefined });
+    loadPortSummaryPromise = (async () => {
+      try {
+        const serviceSnapshot = get().overview?.services ?? useServiceStore.getState().services;
+        const portSummary = await workspaceApi.portSummary(serviceSnapshot);
+        set((state) => ({
+          overview: state.overview ? { ...state.overview, portSummary } : state.overview,
+          portSummaryLoading: false,
+          portSummaryError: undefined,
+        }));
+        return portSummary;
+      } catch (error) {
+        const message = getAppErrorMessage(error, "Failed to load workspace port summary.");
+        set({
+          portSummaryLoading: false,
+          portSummaryError: message,
+        });
+        throw error;
+      } finally {
+        loadPortSummaryPromise = undefined;
+      }
+    })();
+
+    return loadPortSummaryPromise;
   },
 }));

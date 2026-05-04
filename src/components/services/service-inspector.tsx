@@ -176,9 +176,9 @@ export function ServiceInspector({
 
         {service.name === "redis" ? (
           <div className="inline-note-card" data-tone="warning">
-            <strong>Redis auth compatibility</strong>
+            <strong>Redis local auth</strong>
             <span>
-              Managed Redis uses a local ACL bootstrap so no-password clients work, and clients that send AUTH for a local password do not fail the workspace.
+              Managed Redis defaults to local no-password access. Use Redis config if the workspace needs a password.
             </span>
           </div>
         ) : null}

@@ -16,6 +16,7 @@ import { ProjectWorkerPanel } from "@/components/workers/project-worker-panel";
 import { ReliabilityWorkbench } from "@/components/reliability/reliability-workbench";
 import { RecipeStudio } from "@/components/recipes/recipe-studio";
 import { RuntimeConfigDialog } from "@/components/settings/runtime-config-dialog";
+import { RedisManager } from "@/components/settings/redis-manager";
 import { ServiceInspector } from "@/components/services/service-inspector";
 import { ServiceTable } from "@/components/services/service-table";
 import { ActionMenu, ActionMenuItem } from "@/components/ui/action-menu";
@@ -1696,40 +1697,43 @@ function ServicesRoute() {
       subtitle="Live runtime control, PID tracking, port checks, logs,.. for the local PHP stack."
       title="Services"
     >
-      <div className="split-layout">
-        <div className="stack">
-          <ServiceTable
+      <div className="stack">
+        <div className="split-layout">
+          <div className="stack">
+            <ServiceTable
+              actionName={actionName}
+              onInspect={(name) => {
+                selectService(name);
+              }}
+              onRestart={(name) => runServiceAction(name, "restart")}
+              onStart={(name) => runServiceAction(name, "start")}
+              onStop={(name) => runServiceAction(name, "stop")}
+              selectedServiceName={selectedServiceName}
+              services={services}
+            />
+          </div>
+
+          <ServiceInspector
             actionName={actionName}
-            onInspect={(name) => {
-              selectService(name);
-            }}
-            onRestart={(name) => runServiceAction(name, "restart")}
-            onStart={(name) => runServiceAction(name, "start")}
-            onStop={(name) => runServiceAction(name, "stop")}
-            selectedServiceName={selectedServiceName}
-            services={services}
+            activeOptionalTool={activeOptionalTool}
+            activeRuntime={activeRuntime}
+            onOpenDashboard={() =>
+              activeService ? handleOpenServiceDashboard(activeService.name) : Promise.resolve()
+            }
+            onOpenLogs={() => navigate(`/logs?source=${activeService?.name ?? selectedServiceName ?? "apache"}`)}
+            onRefresh={refreshSelectedService}
+            onRestart={() =>
+              activeService ? runServiceAction(activeService.name, "restart") : Promise.resolve()
+            }
+            onStart={() =>
+              activeService ? runServiceAction(activeService.name, "start") : Promise.resolve()
+            }
+            onStop={() => (activeService ? runServiceAction(activeService.name, "stop") : Promise.resolve())}
+            portCheck={portCheck}
+            service={activeService}
           />
         </div>
 
-        <ServiceInspector
-          actionName={actionName}
-          activeOptionalTool={activeOptionalTool}
-          activeRuntime={activeRuntime}
-          onOpenDashboard={() =>
-            activeService ? handleOpenServiceDashboard(activeService.name) : Promise.resolve()
-          }
-          onOpenLogs={() => navigate(`/logs?source=${activeService?.name ?? selectedServiceName ?? "apache"}`)}
-          onRefresh={refreshSelectedService}
-          onRestart={() =>
-            activeService ? runServiceAction(activeService.name, "restart") : Promise.resolve()
-          }
-          onStart={() =>
-            activeService ? runServiceAction(activeService.name, "start") : Promise.resolve()
-          }
-          onStop={() => (activeService ? runServiceAction(activeService.name, "stop") : Promise.resolve())}
-          portCheck={portCheck}
-          service={activeService}
-        />
       </div>
     </PageLayout>
   );
@@ -3696,6 +3700,7 @@ function SettingsRoute() {
   const [pendingRuntimeRemoval, setPendingRuntimeRemoval] = useState<RuntimeInventoryItem | null>(null);
   const [pendingOptionalToolRemoval, setPendingOptionalToolRemoval] =
     useState<OptionalToolInventoryItem | null>(null);
+  const [redisManagerOpen, setRedisManagerOpen] = useState(false);
   const [pendingPhpExtensionRemoval, setPendingPhpExtensionRemoval] =
     useState<PhpExtensionState | null>(null);
   const [pendingPersistentTunnelDeletion, setPendingPersistentTunnelDeletion] =
@@ -3722,6 +3727,10 @@ function SettingsRoute() {
   const phpExtensionPackagesRequestRef = useRef(0);
   const phpFunctionsRequestRef = useRef(0);
   const pushToast = useToastStore((state) => state.push);
+  const redisService = useServiceStore((state) =>
+    state.services.find((service) => service.name === "redis"),
+  );
+  const loadServicesForRedisManager = useServiceStore((state) => state.loadServices);
   const showSettingsScrim = useDelayedBusy(workspaceBootLoading);
   const activeTab = (() => {
     const tab = searchParams.get("tab");
@@ -4202,6 +4211,28 @@ function SettingsRoute() {
     document.addEventListener("keydown", handleKeydown);
     return () => document.removeEventListener("keydown", handleKeydown);
   }, [phpToolsRuntimeId]);
+
+  useEffect(() => {
+    if (!redisManagerOpen) {
+      return;
+    }
+
+    function handleKeydown(event: KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      if (document.querySelector(".redis-manager-dialog [data-nested-modal='true']")) {
+        return;
+      }
+
+      event.preventDefault();
+      setRedisManagerOpen(false);
+    }
+
+    document.addEventListener("keydown", handleKeydown);
+    return () => document.removeEventListener("keydown", handleKeydown);
+  }, [redisManagerOpen]);
 
   useEffect(() => {
     if (!runtimeConfigRuntimeId) {
@@ -5007,6 +5038,15 @@ function SettingsRoute() {
       });
     } finally {
       setActionLoading(null);
+    }
+  }
+
+  async function handleOpenRedisManager() {
+    setRedisManagerOpen(true);
+    try {
+      await loadServicesForRedisManager();
+    } catch {
+      // The manager can still show its own Redis connection state without service metadata.
     }
   }
 
@@ -6484,6 +6524,15 @@ function SettingsRoute() {
                           >
                             {actionLoading === `optional-reveal:${tool.id}` ? "Opening..." : "Open"}
                           </Button>
+                          {tool.toolType === "redis" && tool.status === "available" ? (
+                            <Button
+                              disabled={actionLoading !== null}
+                              onClick={() => void handleOpenRedisManager()}
+                              variant="primary"
+                            >
+                              Open Manager
+                            </Button>
+                          ) : null}
                           {updatePackage ? (
                             <Button
                               disabled={packagesLoading || actionLoading !== null}
@@ -6609,13 +6658,25 @@ function SettingsRoute() {
                                 : "Install"}
                           </Button>
                           {installedTool ? (
-                            <Button
-                              className="button-danger"
-                              disabled={actionLoading !== null}
-                              onClick={() => setPendingOptionalToolRemoval(installedTool)}
-                            >
-                              Uninstall
-                            </Button>
+                            <>
+                              {toolPackage.toolType === "redis" &&
+                              installedTool.status === "available" ? (
+                                <Button
+                                  disabled={actionLoading !== null}
+                                  onClick={() => void handleOpenRedisManager()}
+                                  variant="primary"
+                                >
+                                  Open Manager
+                                </Button>
+                              ) : null}
+                              <Button
+                                className="button-danger"
+                                disabled={actionLoading !== null}
+                                onClick={() => setPendingOptionalToolRemoval(installedTool)}
+                              >
+                                Uninstall
+                              </Button>
+                            </>
                           ) : null}
                         </div>
                       </td>
@@ -6647,6 +6708,29 @@ function SettingsRoute() {
           />
         ) : null}
       </div>
+
+      {redisManagerOpen ? (
+        <div
+          className="wizard-overlay"
+          onClick={() => setRedisManagerOpen(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="redis-manager-dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="runtime-tools-header">
+              <div>
+                <h2>Redis Manager</h2>
+                <p>
+                  Browse local Redis keys and edit string values from the installed Redis optional
+                  tool.
+                </p>
+              </div>
+              <Button onClick={() => setRedisManagerOpen(false)}>Close</Button>
+            </div>
+            <RedisManager service={redisService} />
+          </div>
+        </div>
+      ) : null}
 
       {phpToolsRuntimeId && selectedPhpRuntime ? (
         <div

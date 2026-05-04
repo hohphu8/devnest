@@ -12,6 +12,16 @@ import type {
   OptionalToolPackage,
 } from "@/types/optional-tool";
 import type {
+  RedisClearDatabaseResult,
+  RedisConnectionOptions,
+  RedisDeleteKeysResult,
+  RedisKeyListResult,
+  RedisKeyMetadata,
+  RedisKeyTypeFilter,
+  RedisKeyValue,
+  RedisManagerStatus,
+} from "@/types/redis-manager";
+import type {
   ApplyProjectPersistentHostnameInput,
   ApplyProjectPersistentHostnameResult,
   CreatePersistentNamedTunnelInput,
@@ -112,6 +122,7 @@ const MOCK_SERVICE_LOGS_KEY = "devnest.mock.service-logs";
 const MOCK_DATABASES_KEY = "devnest.mock.databases";
 const MOCK_DATABASE_SNAPSHOTS_KEY = "devnest.mock.database-snapshots";
 const MOCK_DATABASE_TIME_MACHINE_KEY = "devnest.mock.database-time-machine";
+const MOCK_REDIS_KEYS_KEY = "devnest.mock.redis-keys";
 const MOCK_PROJECT_ENV_VARS_KEY = "devnest.mock.project-env-vars";
 const MOCK_PROJECT_SCHEDULED_TASKS_KEY = "devnest.mock.project-scheduled-tasks";
 const MOCK_PROJECT_SCHEDULED_TASK_RUNS_KEY = "devnest.mock.project-scheduled-task-runs";
@@ -298,6 +309,120 @@ function writeMockDatabaseTimeMachine(statuses: Record<string, MockDatabaseTimeM
   }
 
   window.localStorage.setItem(MOCK_DATABASE_TIME_MACHINE_KEY, JSON.stringify(statuses));
+}
+
+interface MockRedisKeyRecord {
+  key: string;
+  keyType: string;
+  value?: string | null;
+  ttlSeconds?: number | null;
+  sizeBytes?: number | null;
+}
+
+function defaultMockRedisKeys(): MockRedisKeyRecord[] {
+  return [
+    {
+      key: "devnest:cache:status",
+      keyType: "string",
+      value: "ready",
+      ttlSeconds: null,
+      sizeBytes: 5,
+    },
+    {
+      key: "laravel:queue:default",
+      keyType: "list",
+      value: null,
+      ttlSeconds: null,
+      sizeBytes: 256,
+    },
+    {
+      key: "sessions:active",
+      keyType: "set",
+      value: null,
+      ttlSeconds: 3600,
+      sizeBytes: 128,
+    },
+  ];
+}
+
+function readMockRedisKeys(): MockRedisKeyRecord[] {
+  if (typeof window === "undefined") {
+    return defaultMockRedisKeys();
+  }
+
+  const stored = window.localStorage.getItem(MOCK_REDIS_KEYS_KEY);
+  if (!stored) {
+    const defaults = defaultMockRedisKeys();
+    writeMockRedisKeys(defaults);
+    return defaults;
+  }
+
+  return JSON.parse(stored) as MockRedisKeyRecord[];
+}
+
+function writeMockRedisKeys(keys: MockRedisKeyRecord[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(MOCK_REDIS_KEYS_KEY, JSON.stringify(keys));
+}
+
+function mockRedisOptionsDbIndex(options?: RedisConnectionOptions | null): number {
+  const dbIndex = Number(options?.dbIndex ?? 0);
+  return Number.isFinite(dbIndex) && dbIndex >= 0 ? dbIndex : 0;
+}
+
+function mockRedisStatus(options?: RedisConnectionOptions | null): RedisManagerStatus {
+  const service = readMockServices().find((item) => item.name === "redis");
+  const connected = service?.status === "running";
+  return {
+    host: "127.0.0.1",
+    port: service?.port ?? 6379,
+    dbIndex: mockRedisOptionsDbIndex(options),
+    connected,
+    redisVersion: connected ? "8.6.2" : null,
+    keyCount: connected ? readMockRedisKeys().length : null,
+    message: connected
+      ? "Connected to local Redis."
+      : "Start Redis before opening Redis Manager.",
+  };
+}
+
+function ensureMockRedisRunning() {
+  const status = mockRedisStatus();
+  if (!status.connected) {
+    throw {
+      code: "REDIS_SERVICE_STOPPED",
+      message: "Start Redis before opening Redis Manager.",
+    } satisfies AppError;
+  }
+}
+
+function mockRedisKeyMatches(
+  key: MockRedisKeyRecord,
+  pattern: string,
+  typeFilter?: RedisKeyTypeFilter | string | null,
+) {
+  const normalizedPattern = pattern.trim() || "*";
+  const regex = new RegExp(
+    `^${normalizedPattern
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".")}$`,
+    "i",
+  );
+  const typeMatches = !typeFilter || typeFilter === "all" || key.keyType === typeFilter;
+  return regex.test(key.key) && typeMatches;
+}
+
+function mockRedisKeyMetadata(key: MockRedisKeyRecord): RedisKeyMetadata {
+  return {
+    key: key.key,
+    keyType: key.keyType,
+    ttlSeconds: key.ttlSeconds ?? null,
+    sizeBytes: key.sizeBytes ?? key.value?.length ?? null,
+  };
 }
 
 function mockLinkedProjectNamesForDatabase(name: string): string[] {
@@ -5443,6 +5568,114 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
       logs[name] = [];
       writeMockServiceLogs(logs);
       return true as T;
+    }
+    case "get_redis_manager_status": {
+      return mockRedisStatus((args?.options ?? null) as RedisConnectionOptions | null) as T;
+    }
+    case "list_redis_keys": {
+      ensureMockRedisRunning();
+      const input = (args?.input ?? {}) as {
+        options?: RedisConnectionOptions;
+        cursor?: string;
+        pattern?: string;
+        typeFilter?: RedisKeyTypeFilter;
+        pageSize?: number;
+      };
+      const start = Number(input.cursor ?? 0);
+      const pageSize = Number(input.pageSize ?? 100);
+      const pattern = input.pattern?.trim() || "*";
+      const filtered = readMockRedisKeys().filter((key) =>
+        mockRedisKeyMatches(key, pattern, input.typeFilter),
+      );
+      const page = filtered.slice(start, start + pageSize);
+      const nextCursor = start + page.length < filtered.length ? String(start + page.length) : "0";
+      return {
+        cursor: String(start),
+        nextCursor,
+        complete: nextCursor === "0",
+        dbIndex: mockRedisOptionsDbIndex(input.options),
+        pattern,
+        typeFilter: input.typeFilter === "all" ? null : input.typeFilter ?? null,
+        keys: page.map(mockRedisKeyMetadata),
+      } satisfies RedisKeyListResult as T;
+    }
+    case "get_redis_key": {
+      ensureMockRedisRunning();
+      const input = (args?.input ?? {}) as { key?: string };
+      const redisKey = String(input.key ?? "").trim();
+      const key = readMockRedisKeys().find((item) => item.key === redisKey);
+      if (!key) {
+        throw {
+          code: "REDIS_KEY_NOT_FOUND",
+          message: "The selected Redis key does not exist anymore.",
+        } satisfies AppError;
+      }
+      return {
+        ...mockRedisKeyMetadata(key),
+        value: key.keyType === "string" ? key.value ?? "" : null,
+        editable: key.keyType === "string",
+      } satisfies RedisKeyValue as T;
+    }
+    case "set_redis_string_key": {
+      ensureMockRedisRunning();
+      const input = (args?.input ?? {}) as { key?: string; value?: string };
+      const redisKey = String(input.key ?? "").trim();
+      if (!redisKey) {
+        throw {
+          code: "REDIS_KEY_INVALID",
+          message: "Redis key is required.",
+        } satisfies AppError;
+      }
+      const value = String(input.value ?? "");
+      const nextRecord: MockRedisKeyRecord = {
+        key: redisKey,
+        keyType: "string",
+        value,
+        ttlSeconds: null,
+        sizeBytes: value.length,
+      };
+      const keys = readMockRedisKeys();
+      writeMockRedisKeys([
+        nextRecord,
+        ...keys.filter((item) => item.key !== redisKey),
+      ]);
+      return {
+        ...mockRedisKeyMetadata(nextRecord),
+        value,
+        editable: true,
+      } satisfies RedisKeyValue as T;
+    }
+    case "delete_redis_keys": {
+      ensureMockRedisRunning();
+      const input = (args?.input ?? {}) as { keys?: string[] };
+      const keys = input.keys ?? [];
+      const before = readMockRedisKeys();
+      const next = before.filter((item) => !keys.includes(item.key));
+      writeMockRedisKeys(next);
+      return {
+        success: true,
+        deleted: before.length - next.length,
+      } satisfies RedisDeleteKeysResult as T;
+    }
+    case "clear_redis_database": {
+      ensureMockRedisRunning();
+      const input = (args?.input ?? {}) as {
+        options?: RedisConnectionOptions;
+        confirmation?: string;
+      };
+      const dbIndex = mockRedisOptionsDbIndex(input.options);
+      const expected = `CLEAR DB ${dbIndex}`;
+      if (String(input.confirmation ?? "").trim() !== expected) {
+        throw {
+          code: "REDIS_CLEAR_CONFIRMATION_REQUIRED",
+          message: `Type \`${expected}\` to clear Redis DB ${dbIndex}.`,
+        } satisfies AppError;
+      }
+      writeMockRedisKeys([]);
+      return {
+        success: true,
+        dbIndex,
+      } satisfies RedisClearDatabaseResult as T;
     }
     case "get_project_frankenphp_worker_settings":
     case "get_project_frankenphp_worker_status": {

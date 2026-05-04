@@ -1681,6 +1681,162 @@ a {
   font-size: 12px;
 }
 
+.redis-manager-card {
+  gap: 16px;
+}
+
+.redis-manager-dialog {
+  width: min(1380px, calc(100vw - 48px));
+  min-height: min(720px, calc(100vh - 48px));
+  max-height: calc(100vh - 48px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+  padding: 20px;
+  border-radius: 22px;
+  border: 1px solid rgba(171, 195, 231, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent),
+    rgba(8, 14, 23, 0.98);
+  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.35);
+  animation: wizard-in 180ms ease;
+}
+
+.redis-manager-dialog .redis-manager-card {
+  min-height: 0;
+  overflow: auto;
+}
+
+.redis-manager-status {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr)) minmax(220px, 1.5fr);
+  gap: 12px;
+}
+
+.redis-manager-status .detail-item,
+.redis-key-editor-section {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(171, 195, 231, 0.1);
+  background: rgba(255, 255, 255, 0.028);
+}
+
+.redis-manager-status-message strong,
+.redis-key-editor-section strong {
+  overflow-wrap: anywhere;
+}
+
+.redis-connection-bar,
+.redis-manager-toolbar {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 120px minmax(160px, 1fr) minmax(160px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.redis-connection-bar label {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.redis-manager-panel {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 14px;
+}
+
+.redis-manager-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  grid-template-columns: none;
+}
+
+.redis-manager-toolbar .input {
+  flex: 1 1 280px;
+}
+
+.redis-manager-toolbar .select {
+  flex: 0 0 160px;
+}
+
+.redis-scan-summary {
+  align-self: center;
+  color: var(--text-muted);
+  flex: 0 1 220px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.redis-key-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.redis-key-table {
+  min-width: 720px;
+}
+
+.redis-key-table-shell {
+  max-height: 430px;
+}
+
+.redis-key-editor {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.redis-key-editor-section {
+  display: grid;
+  gap: 10px;
+}
+
+.redis-key-editor-section h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 108px;
+  resize: vertical;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.025);
+  color: var(--text-primary);
+  outline: none;
+  padding: 10px 12px;
+  font: inherit;
+  line-height: 1.5;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.textarea:focus {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 4px rgba(42, 143, 255, 0.12);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.redis-value-textarea {
+  min-height: 180px;
+  font-family: "Cascadia Mono", "JetBrains Mono", "Consolas", monospace;
+  font-size: 12.5px;
+}
+
 .action-menu {
   position: relative;
 }
@@ -2954,6 +3110,14 @@ a {
   }
 
   .split-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .redis-manager-status,
+  .redis-connection-bar,
+  .redis-manager-toolbar,
+  .redis-key-editor,
+  .redis-key-workbench {
     grid-template-columns: 1fr;
   }
 

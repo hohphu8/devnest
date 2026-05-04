@@ -14,7 +14,7 @@ use crate::utils::paths::downloaded_optional_tool_type_dir;
 use crate::utils::process::configure_background_command;
 use crate::utils::windows::{
     apply_hosts_file_with_elevation, hosts_file_path, open_folder_in_explorer,
-    remove_hosts_file_with_elevation, reveal_in_explorer,
+    remove_hosts_file_with_elevation,
 };
 use rusqlite::Connection;
 use std::fs;
@@ -98,8 +98,8 @@ fn parse_first_version_token(output: &str) -> Option<String> {
     output
         .split_whitespace()
         .filter(|token| !token.contains('\\') && !token.contains('/'))
-        .map(|token| {
-            token.trim_matches(|character: char| {
+        .flat_map(|token| {
+            token.split(|character: char| {
                 !(character.is_ascii_alphanumeric()
                     || character == '.'
                     || character == '-'
@@ -115,6 +115,28 @@ fn parse_first_version_token(output: &str) -> Option<String> {
         .map(|token| token.to_string())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::parse_first_version_token;
+
+    #[test]
+    fn parses_redis_windows_version_output() {
+        let output = "Redis server v=8.6.2 sha=00000000:0 malloc=libc bits=64";
+
+        assert_eq!(parse_first_version_token(output), Some("8.6.2".to_string()));
+    }
+
+    #[test]
+    fn parses_restic_version_output() {
+        let output = "restic 0.18.1 compiled with go1.25.1 on windows/amd64";
+
+        assert_eq!(
+            parse_first_version_token(output),
+            Some("0.18.1".to_string())
+        );
+    }
+}
+
 fn verify_optional_tool_binary(
     package: &OptionalToolPackage,
     entry_path: &Path,
@@ -122,6 +144,8 @@ fn verify_optional_tool_binary(
     let args = match package.tool_type {
         OptionalToolType::Mailpit => vec!["version"],
         OptionalToolType::Cloudflared => vec!["--version"],
+        OptionalToolType::Redis => vec!["--version"],
+        OptionalToolType::Restic => vec!["version"],
         OptionalToolType::Phpmyadmin => {
             if !entry_path.exists() || !entry_path.is_file() {
                 return Err(AppError::new_validation(
@@ -597,23 +621,25 @@ pub fn reveal_optional_tool_path(
 ) -> Result<bool, AppError> {
     let connection = connection_from_state(&state)?;
     let tool = OptionalToolVersionRepository::get_by_id(&connection, &tool_id)?;
+    let tool_path = PathBuf::from(&tool.path);
+    let folder = if tool_path.exists() && tool_path.is_dir() {
+        tool_path
+    } else {
+        tool_path.parent().map(PathBuf::from).ok_or_else(|| {
+            AppError::new_validation(
+                "OPTIONAL_TOOL_PATH_OPEN_FAILED",
+                "DevNest could not determine which optional tool folder to open.",
+            )
+        })?
+    };
 
-    if matches!(tool.tool_type, OptionalToolType::Phpmyadmin) {
-        let tool_path = PathBuf::from(&tool.path);
-        let tool_type_dir =
-            downloaded_optional_tool_type_dir(&state.workspace_dir, &tool.tool_type);
-        if tool_path.starts_with(&tool_type_dir) {
-            let install_root = tool_path
-                .ancestors()
-                .find(|ancestor| ancestor.parent() == Some(tool_type_dir.as_path()))
-                .map(PathBuf::from);
-            if let Some(install_root) = install_root {
-                open_folder_in_explorer(&install_root)?;
-                return Ok(true);
-            }
-        }
+    if !folder.exists() || !folder.is_dir() {
+        return Err(AppError::new_validation(
+            "OPTIONAL_TOOL_PATH_OPEN_FAILED",
+            "The optional tool folder does not exist anymore.",
+        ));
     }
 
-    reveal_in_explorer(Path::new(&tool.path))?;
+    open_folder_in_explorer(&folder)?;
     Ok(true)
 }

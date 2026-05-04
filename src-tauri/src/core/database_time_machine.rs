@@ -35,6 +35,17 @@ pub enum SnapshotTriggerSource {
     Scheduled,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DatabaseSnapshotStorageBackend {
+    Sql,
+    Restic,
+}
+
+fn default_snapshot_storage_backend() -> DatabaseSnapshotStorageBackend {
+    DatabaseSnapshotStorageBackend::Sql
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseTimeMachineStatus {
@@ -59,6 +70,12 @@ pub struct DatabaseSnapshotSummary {
     pub created_at: String,
     pub trigger_source: SnapshotTriggerSource,
     pub size_bytes: u64,
+    #[serde(default = "default_snapshot_storage_backend")]
+    pub storage_backend: DatabaseSnapshotStorageBackend,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restic_snapshot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logical_dump_path: Option<String>,
     #[serde(default)]
     pub linked_project_names: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,7 +121,13 @@ struct DatabaseTimeMachineConfig {
 struct SnapshotMetadata {
     format_version: u32,
     snapshot: DatabaseSnapshotSummary,
-    dump_file_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dump_file_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SnapshotRetentionResult {
+    pub removed_restic_snapshot_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,7 +157,9 @@ pub struct PendingSnapshot {
 #[derive(Debug, Clone)]
 pub struct SnapshotRestoreTarget {
     pub summary: DatabaseSnapshotSummary,
-    pub dump_path: PathBuf,
+    pub dump_path: Option<PathBuf>,
+    pub restic_snapshot_id: Option<String>,
+    pub logical_dump_path: Option<String>,
 }
 
 #[derive(Debug)]
@@ -451,8 +476,11 @@ fn metadata_dump_path(
     workspace_dir: &Path,
     database_name: &str,
     metadata: &SnapshotMetadata,
-) -> PathBuf {
-    snapshots_dir(workspace_dir, database_name).join(&metadata.dump_file_name)
+) -> Option<PathBuf> {
+    metadata
+        .dump_file_name
+        .as_ref()
+        .map(|dump_file_name| snapshots_dir(workspace_dir, database_name).join(dump_file_name))
 }
 
 fn list_snapshot_metadata(
@@ -485,8 +513,11 @@ fn list_snapshot_metadata(
         }
 
         let metadata = parse_snapshot_metadata(&path)?;
-        let dump_path = metadata_dump_path(workspace_dir, database_name, &metadata);
-        if !dump_path.exists() {
+        if metadata.snapshot.storage_backend == DatabaseSnapshotStorageBackend::Sql
+            && !metadata_dump_path(workspace_dir, database_name, &metadata)
+                .as_deref()
+                .is_some_and(Path::exists)
+        {
             return Err(AppError::new_validation(
                 "DATABASE_SNAPSHOT_INTEGRITY_FAILED",
                 "A managed database snapshot is missing its SQL dump file.",
@@ -782,6 +813,9 @@ pub fn begin_snapshot_capture(
             created_at,
             trigger_source: request.trigger_source,
             size_bytes: 0,
+            storage_backend: DatabaseSnapshotStorageBackend::Sql,
+            restic_snapshot_id: None,
+            logical_dump_path: None,
             linked_project_names: request.linked_project_names,
             scheduled_interval_minutes: request.scheduled_interval_minutes,
             note: request.note,
@@ -801,6 +835,34 @@ pub fn finalize_snapshot_capture(
     database_name: &str,
     pending: PendingSnapshot,
 ) -> Result<DatabaseSnapshotSummary, AppError> {
+    Ok(finalize_snapshot_capture_with_retention(workspace_dir, database_name, pending)?.snapshot)
+}
+
+pub fn finalize_restic_snapshot_capture(
+    workspace_dir: &Path,
+    database_name: &str,
+    pending: PendingSnapshot,
+    restic_snapshot_id: String,
+    logical_dump_path: String,
+) -> Result<(DatabaseSnapshotSummary, SnapshotRetentionResult), AppError> {
+    let mut pending = pending;
+    pending.summary.storage_backend = DatabaseSnapshotStorageBackend::Restic;
+    pending.summary.restic_snapshot_id = Some(restic_snapshot_id);
+    pending.summary.logical_dump_path = Some(logical_dump_path);
+    let result = finalize_snapshot_capture_with_retention(workspace_dir, database_name, pending)?;
+    Ok((result.snapshot, result.retention))
+}
+
+struct FinalizedSnapshot {
+    snapshot: DatabaseSnapshotSummary,
+    retention: SnapshotRetentionResult,
+}
+
+fn finalize_snapshot_capture_with_retention(
+    workspace_dir: &Path,
+    database_name: &str,
+    pending: PendingSnapshot,
+) -> Result<FinalizedSnapshot, AppError> {
     let mut snapshot = pending.summary.clone();
     let dump_metadata = fs::metadata(&pending.dump_path).map_err(|error| {
         AppError::with_details(
@@ -817,16 +879,22 @@ pub fn finalize_snapshot_capture(
     }
     snapshot.size_bytes = dump_metadata.len();
 
-    let dump_file_name = pending
-        .dump_path
-        .file_name()
-        .map(|value| value.to_string_lossy().to_string())
-        .ok_or_else(|| {
-            AppError::new_validation(
-                "DATABASE_SNAPSHOT_FAILED",
-                "DevNest could not determine the snapshot dump file name.",
-            )
-        })?;
+    let dump_file_name = if snapshot.storage_backend == DatabaseSnapshotStorageBackend::Sql {
+        Some(
+            pending
+                .dump_path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .ok_or_else(|| {
+                    AppError::new_validation(
+                        "DATABASE_SNAPSHOT_FAILED",
+                        "DevNest could not determine the snapshot dump file name.",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     let payload = serde_json::to_string_pretty(&SnapshotMetadata {
         format_version: TIME_MACHINE_FORMAT_VERSION,
         snapshot: snapshot.clone(),
@@ -847,25 +915,41 @@ pub fn finalize_snapshot_capture(
         )
     })?;
 
-    retain_latest_snapshots(workspace_dir, database_name)?;
-    Ok(snapshot)
+    let retention = retain_latest_snapshots(workspace_dir, database_name)?;
+    Ok(FinalizedSnapshot {
+        snapshot,
+        retention,
+    })
 }
 
-fn retain_latest_snapshots(workspace_dir: &Path, database_name: &str) -> Result<(), AppError> {
+fn retain_latest_snapshots(
+    workspace_dir: &Path,
+    database_name: &str,
+) -> Result<SnapshotRetentionResult, AppError> {
     let snapshots = list_snapshot_metadata(workspace_dir, database_name)?;
     if snapshots.len() <= SNAPSHOT_RETENTION_LIMIT {
-        return Ok(());
+        return Ok(SnapshotRetentionResult {
+            removed_restic_snapshot_ids: Vec::new(),
+        });
     }
 
+    let mut removed_restic_snapshot_ids = Vec::new();
     for snapshot in snapshots.iter().skip(SNAPSHOT_RETENTION_LIMIT) {
         let dump_path = metadata_dump_path(workspace_dir, database_name, snapshot);
         let metadata_path = snapshots_dir(workspace_dir, database_name)
             .join(format!("{}.json", snapshot.snapshot.id));
-        fs::remove_file(dump_path).ok();
+        if let Some(dump_path) = dump_path {
+            fs::remove_file(dump_path).ok();
+        }
         fs::remove_file(metadata_path).ok();
+        if let Some(restic_snapshot_id) = snapshot.snapshot.restic_snapshot_id.as_ref() {
+            removed_restic_snapshot_ids.push(restic_snapshot_id.clone());
+        }
     }
 
-    Ok(())
+    Ok(SnapshotRetentionResult {
+        removed_restic_snapshot_ids,
+    })
 }
 
 pub fn resolve_snapshot_for_restore(
@@ -889,7 +973,40 @@ pub fn resolve_snapshot_for_restore(
             "The selected snapshot metadata does not match the requested snapshot ID.",
         ));
     }
-    let dump_path = metadata_dump_path(workspace_dir, database_name, &metadata);
+
+    if metadata.snapshot.storage_backend == DatabaseSnapshotStorageBackend::Restic {
+        let restic_snapshot_id = metadata
+            .snapshot
+            .restic_snapshot_id
+            .clone()
+            .ok_or_else(|| {
+                AppError::new_validation(
+                    "DATABASE_SNAPSHOT_INTEGRITY_FAILED",
+                    "The selected Restic snapshot is missing its repository snapshot ID.",
+                )
+            })?;
+        let logical_dump_path = metadata.snapshot.logical_dump_path.clone().ok_or_else(|| {
+            AppError::new_validation(
+                "DATABASE_SNAPSHOT_INTEGRITY_FAILED",
+                "The selected Restic snapshot is missing its logical dump path.",
+            )
+        })?;
+
+        return Ok(SnapshotRestoreTarget {
+            summary: metadata.snapshot,
+            dump_path: None,
+            restic_snapshot_id: Some(restic_snapshot_id),
+            logical_dump_path: Some(logical_dump_path),
+        });
+    }
+
+    let dump_path =
+        metadata_dump_path(workspace_dir, database_name, &metadata).ok_or_else(|| {
+            AppError::new_validation(
+                "DATABASE_SNAPSHOT_INTEGRITY_FAILED",
+                "The selected managed database snapshot is missing its SQL dump file.",
+            )
+        })?;
     let dump_metadata = fs::metadata(&dump_path).map_err(|error| {
         AppError::with_details(
             "DATABASE_SNAPSHOT_INTEGRITY_FAILED",
@@ -903,10 +1020,11 @@ pub fn resolve_snapshot_for_restore(
             "The selected managed database snapshot dump file is empty.",
         ));
     }
-
     Ok(SnapshotRestoreTarget {
         summary: metadata.snapshot,
-        dump_path,
+        dump_path: Some(dump_path),
+        restic_snapshot_id: None,
+        logical_dump_path: None,
     })
 }
 
@@ -964,6 +1082,36 @@ mod tests {
         fs::write(&pending.dump_path, sql).expect("snapshot dump should write");
         super::finalize_snapshot_capture(workspace_dir, database_name, pending)
             .expect("snapshot should finalize");
+    }
+
+    fn write_restic_snapshot(
+        workspace_dir: &Path,
+        database_name: &str,
+        restic_snapshot_id: &str,
+        sql: &str,
+    ) -> String {
+        let pending = super::begin_snapshot_capture(
+            workspace_dir,
+            database_name,
+            SnapshotCaptureRequest {
+                trigger_source: SnapshotTriggerSource::Manual,
+                note: None,
+                linked_project_names: Vec::new(),
+                scheduled_interval_minutes: None,
+            },
+        )
+        .expect("pending restic snapshot should create");
+        let logical_dump_path = format!("databases/{database_name}/{}.sql", pending.summary.id);
+        fs::write(&pending.dump_path, sql).expect("snapshot dump should write");
+        let (summary, _) = super::finalize_restic_snapshot_capture(
+            workspace_dir,
+            database_name,
+            pending,
+            restic_snapshot_id.to_string(),
+            logical_dump_path,
+        )
+        .expect("restic snapshot should finalize");
+        summary.id
     }
 
     #[test]
@@ -1119,11 +1267,94 @@ mod tests {
         let dump_path = super::resolve_snapshot_for_restore(&workspace, "shop_api", &snapshot.id)
             .expect("snapshot should resolve")
             .dump_path;
-        fs::remove_file(dump_path).expect("dump should remove");
+        fs::remove_file(dump_path.expect("legacy dump path should exist"))
+            .expect("dump should remove");
 
         let missing_error = resolve_snapshot_for_restore(&workspace, "shop_api", &snapshot.id)
             .expect_err("missing dump should fail");
         assert_eq!(missing_error.code, "DATABASE_SNAPSHOT_INTEGRITY_FAILED");
+
+        cleanup_workspace(&workspace);
+    }
+
+    #[test]
+    fn lists_and_resolves_legacy_sql_and_restic_snapshots() {
+        let workspace = setup_workspace();
+        enable(&workspace, "shop_api").expect("time machine should enable");
+        write_snapshot(
+            &workspace,
+            "shop_api",
+            SnapshotTriggerSource::Manual,
+            None,
+            &[],
+            "SELECT 'legacy';",
+        );
+        let restic_snapshot_id = write_restic_snapshot(
+            &workspace,
+            "shop_api",
+            "restic-snapshot-1",
+            "SELECT 'restic';",
+        );
+
+        let snapshots = list_snapshots(&workspace, "shop_api").expect("snapshots should list");
+        assert_eq!(snapshots.len(), 2);
+        assert!(
+            snapshots
+                .iter()
+                .any(|snapshot| snapshot.storage_backend
+                    == super::DatabaseSnapshotStorageBackend::Sql)
+        );
+        assert!(snapshots.iter().any(|snapshot| {
+            snapshot.storage_backend == super::DatabaseSnapshotStorageBackend::Restic
+                && snapshot.restic_snapshot_id.as_deref() == Some("restic-snapshot-1")
+        }));
+
+        let restic_restore =
+            resolve_snapshot_for_restore(&workspace, "shop_api", &restic_snapshot_id)
+                .expect("restic snapshot should resolve");
+        assert!(restic_restore.dump_path.is_none());
+        assert_eq!(
+            restic_restore.restic_snapshot_id.as_deref(),
+            Some("restic-snapshot-1")
+        );
+        assert!(restic_restore.logical_dump_path.is_some());
+
+        cleanup_workspace(&workspace);
+    }
+
+    #[test]
+    fn retention_reports_removed_restic_snapshot_ids() {
+        let workspace = setup_workspace();
+        enable(&workspace, "shop_api").expect("time machine should enable");
+
+        write_restic_snapshot(&workspace, "shop_api", "restic-1", "SELECT 1;");
+        write_restic_snapshot(&workspace, "shop_api", "restic-2", "SELECT 2;");
+        write_restic_snapshot(&workspace, "shop_api", "restic-3", "SELECT 3;");
+
+        let pending = super::begin_snapshot_capture(
+            &workspace,
+            "shop_api",
+            SnapshotCaptureRequest {
+                trigger_source: SnapshotTriggerSource::Manual,
+                note: None,
+                linked_project_names: Vec::new(),
+                scheduled_interval_minutes: None,
+            },
+        )
+        .expect("pending restic snapshot should create");
+        let logical_dump_path = format!("databases/shop_api/{}.sql", pending.summary.id);
+        fs::write(&pending.dump_path, "SELECT 4;").expect("snapshot dump should write");
+        let (_, retention) = super::finalize_restic_snapshot_capture(
+            &workspace,
+            "shop_api",
+            pending,
+            "restic-4".to_string(),
+            logical_dump_path,
+        )
+        .expect("restic snapshot should finalize");
+
+        assert_eq!(list_snapshots(&workspace, "shop_api").unwrap().len(), 3);
+        assert_eq!(retention.removed_restic_snapshot_ids, vec!["restic-1"]);
 
         cleanup_workspace(&workspace);
     }

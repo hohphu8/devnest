@@ -990,36 +990,90 @@ impl RuntimeVersionRepository {
 
 pub struct OptionalToolVersionRepository;
 
+fn normalize_optional_tool_version(value: &str) -> String {
+    let normalized = value
+        .trim()
+        .trim_start_matches(|character: char| !character.is_ascii_alphanumeric())
+        .trim_end_matches(|character: char| {
+            !(character.is_ascii_alphanumeric()
+                || character == '.'
+                || character == '-'
+                || character == '_')
+        })
+        .trim_start_matches(['v', 'V']);
+
+    if normalized.is_empty() {
+        value.to_string()
+    } else {
+        normalized.to_string()
+    }
+}
+
 impl OptionalToolVersionRepository {
     pub fn repair_invalid_versions(connection: &Connection) -> Result<(), AppError> {
         let tools = Self::list(connection)?;
 
         for tool in tools {
-            if !tool.version.contains('\\') && !tool.version.contains('/') {
+            let repaired_version = if tool.version.contains('\\') || tool.version.contains('/') {
+                Path::new(&tool.path)
+                    .parent()
+                    .and_then(|parent| parent.file_name())
+                    .map(|value| value.to_string_lossy().to_string())
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        AppError::new_validation(
+                            "OPTIONAL_TOOL_VERSION_REPAIR_FAILED",
+                            "DevNest found an invalid optional tool version entry but could not infer the managed version from its install path.",
+                        )
+                    })?
+            } else {
+                normalize_optional_tool_version(&tool.version)
+            };
+
+            if repaired_version == tool.version {
                 continue;
-            }
+            };
 
-            let inferred_version = Path::new(&tool.path)
-                .parent()
-                .and_then(|parent| parent.file_name())
-                .map(|value| value.to_string_lossy().to_string())
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| {
-                    AppError::new_validation(
-                        "OPTIONAL_TOOL_VERSION_REPAIR_FAILED",
-                        "DevNest found an invalid optional tool version entry but could not infer the managed version from its install path.",
-                    )
-                })?;
+            let next_id = format!("{}-{repaired_version}", tool.tool_type.as_str());
+            let existing_id = connection
+                .query_row(
+                    "SELECT id FROM optional_tool_versions WHERE id = ?1 LIMIT 1",
+                    [&next_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let timestamp = now_iso()?;
 
-            let next_id = format!("{}-{inferred_version}", tool.tool_type.as_str());
-            connection.execute(
-                "
-                UPDATE optional_tool_versions
-                SET id = ?2, version = ?3, updated_at = ?4
-                WHERE id = ?1
-                ",
-                params![tool.id, next_id, inferred_version, now_iso()?],
-            )?;
+            if existing_id.is_some() && next_id != tool.id {
+                connection.execute(
+                    "
+                    UPDATE optional_tool_versions
+                    SET path = ?2,
+                        is_active = CASE WHEN ?3 = 1 THEN 1 ELSE is_active END,
+                        updated_at = ?4
+                    WHERE id = ?1
+                    ",
+                    params![
+                        next_id,
+                        tool.path,
+                        if tool.is_active { 1 } else { 0 },
+                        timestamp
+                    ],
+                )?;
+                connection.execute(
+                    "DELETE FROM optional_tool_versions WHERE id = ?1",
+                    [tool.id],
+                )?;
+            } else {
+                connection.execute(
+                    "
+                    UPDATE optional_tool_versions
+                    SET id = ?2, version = ?3, updated_at = ?4
+                    WHERE id = ?1
+                    ",
+                    params![tool.id, next_id, repaired_version, timestamp],
+                )?;
+            };
         }
 
         Ok(())
@@ -2079,6 +2133,36 @@ mod tests {
                 .expect("managed root should exist"),
         )
         .ok();
+    }
+
+    #[test]
+    fn repairs_optional_tool_versions_with_leading_separator() {
+        let (db_path, connection) = setup_test_db();
+
+        connection
+            .execute(
+                "
+                INSERT INTO optional_tool_versions (id, tool_type, version, path, is_active, created_at, updated_at)
+                VALUES ('redis-=8.6.2', 'redis', '=8.6.2', 'D:\\DevNest\\redis-server.exe', 1, '2026-05-04T00:00:00Z', '2026-05-04T00:00:00Z')
+                ",
+                [],
+            )
+            .expect("broken redis optional tool row should insert");
+
+        OptionalToolVersionRepository::repair_invalid_versions(&connection)
+            .expect("repair should succeed");
+
+        let repaired = OptionalToolVersionRepository::find_active_by_type(
+            &connection,
+            &OptionalToolType::Redis,
+        )
+        .expect("repaired redis optional tool should load")
+        .expect("redis should remain active");
+
+        assert_eq!(repaired.version, "8.6.2");
+        assert_eq!(repaired.id, "redis-8.6.2");
+
+        fs::remove_file(db_path).ok();
     }
 
     #[test]

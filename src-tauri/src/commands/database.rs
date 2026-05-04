@@ -4,10 +4,13 @@ use crate::core::database_time_machine::{
 };
 use crate::core::runtime_registry;
 use crate::error::AppError;
+use crate::models::optional_tool::OptionalToolType;
 use crate::models::project::Project;
 use crate::models::service::{ServiceName, ServiceStatus};
 use crate::state::AppState;
-use crate::storage::repositories::{ProjectRepository, ServiceRepository, now_iso};
+use crate::storage::repositories::{
+    OptionalToolVersionRepository, ProjectRepository, ServiceRepository, now_iso,
+};
 use crate::utils::process::configure_background_command;
 use rfd::FileDialog;
 use rusqlite::Connection;
@@ -16,6 +19,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use uuid::Uuid;
 
 fn connection_from_state(state: &AppState) -> Result<Connection, AppError> {
     Ok(Connection::open(&state.db_path)?)
@@ -416,6 +420,339 @@ fn recreate_database(client_binary: &Path, port: u16, database_name: &str) -> Re
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct ResticRepositoryPaths {
+    repository_dir: PathBuf,
+    password_file: PathBuf,
+}
+
+fn restic_repository_paths(workspace_dir: &Path) -> ResticRepositoryPaths {
+    let root = crate::utils::paths::managed_database_time_machine_root(workspace_dir);
+    ResticRepositoryPaths {
+        repository_dir: root.join("restic-repository"),
+        password_file: root.join("restic-password.txt"),
+    }
+}
+
+fn resolve_active_restic_binary(connection: &Connection) -> Result<Option<PathBuf>, AppError> {
+    Ok(
+        OptionalToolVersionRepository::find_active_by_type(connection, &OptionalToolType::Restic)?
+            .and_then(|tool| {
+                let path = PathBuf::from(tool.path);
+                (path.exists() && path.is_file()).then_some(path)
+            }),
+    )
+}
+
+fn ensure_restic_password_file(path: &Path) -> Result<(), AppError> {
+    if path.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            AppError::with_details(
+                "DATABASE_RESTIC_FAILED",
+                "DevNest could not prepare Restic Time Machine storage.",
+                error.to_string(),
+            )
+        })?;
+    }
+
+    fs::write(path, format!("devnest-{}\n", Uuid::new_v4().simple())).map_err(|error| {
+        AppError::with_details(
+            "DATABASE_RESTIC_FAILED",
+            "DevNest could not create the Restic repository password file.",
+            error.to_string(),
+        )
+    })
+}
+
+fn restic_base_command(restic_binary: &Path, paths: &ResticRepositoryPaths) -> Command {
+    let mut command = Command::new(restic_binary);
+    command
+        .arg("-r")
+        .arg(&paths.repository_dir)
+        .arg("--password-file")
+        .arg(&paths.password_file);
+    configure_background_command(&mut command);
+    command
+}
+
+fn map_restic_command_error(code: &str, message: &str, output: std::process::Output) -> AppError {
+    let status = output
+        .status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "terminated".to_string());
+    AppError::with_details(
+        code,
+        message,
+        format!(
+            "Restic exited with status {status}. Check the managed Restic install and repository."
+        ),
+    )
+}
+
+fn ensure_restic_repository(
+    restic_binary: &Path,
+    workspace_dir: &Path,
+) -> Result<ResticRepositoryPaths, AppError> {
+    let paths = restic_repository_paths(workspace_dir);
+    ensure_restic_password_file(&paths.password_file)?;
+    fs::create_dir_all(&paths.repository_dir).map_err(|error| {
+        AppError::with_details(
+            "DATABASE_RESTIC_FAILED",
+            "DevNest could not prepare the Restic repository folder.",
+            error.to_string(),
+        )
+    })?;
+
+    if paths.repository_dir.join("config").exists() {
+        return Ok(paths);
+    }
+
+    let output = restic_base_command(restic_binary, &paths)
+        .arg("init")
+        .output()
+        .map_err(|error| {
+            AppError::with_details(
+                "DATABASE_RESTIC_FAILED",
+                "DevNest could not start Restic to initialize deduplicated snapshots.",
+                error.to_string(),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(map_restic_command_error(
+            "DATABASE_RESTIC_FAILED",
+            "Restic could not initialize the deduplicated Time Machine repository.",
+            output,
+        ));
+    }
+
+    Ok(paths)
+}
+
+fn database_restic_logical_dump_path(database_name: &str, snapshot_id: &str) -> String {
+    format!("databases/{database_name}/{snapshot_id}.sql")
+}
+
+fn parse_restic_backup_snapshot_id(output: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(output).lines().find_map(|line| {
+        let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        value
+            .get("snapshot_id")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| value.get("id").and_then(serde_json::Value::as_str))
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn store_pending_snapshot_with_restic(
+    restic_binary: &Path,
+    workspace_dir: &Path,
+    database_name: &str,
+    pending: &database_time_machine::PendingSnapshot,
+) -> Result<(String, String), AppError> {
+    let paths = ensure_restic_repository(restic_binary, workspace_dir)?;
+    let dump_bytes = fs::read(&pending.dump_path).map_err(|error| {
+        AppError::with_details(
+            "DATABASE_RESTIC_FAILED",
+            "DevNest could not read the SQL dump before storing it with Restic.",
+            error.to_string(),
+        )
+    })?;
+    let logical_dump_path = database_restic_logical_dump_path(database_name, &pending.summary.id);
+
+    let mut command = restic_base_command(restic_binary, &paths);
+    command
+        .arg("backup")
+        .arg("--stdin")
+        .arg("--stdin-filename")
+        .arg(&logical_dump_path)
+        .arg("--json")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        AppError::with_details(
+            "DATABASE_RESTIC_FAILED",
+            "DevNest could not start Restic to store the deduplicated snapshot.",
+            error.to_string(),
+        )
+    })?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(&dump_bytes).map_err(|error| {
+            AppError::with_details(
+                "DATABASE_RESTIC_FAILED",
+                "DevNest could not stream the SQL dump into Restic.",
+                error.to_string(),
+            )
+        })?;
+    }
+    let output = child.wait_with_output().map_err(|error| {
+        AppError::with_details(
+            "DATABASE_RESTIC_FAILED",
+            "Restic did not finish storing the deduplicated snapshot.",
+            error.to_string(),
+        )
+    })?;
+
+    if !output.status.success() {
+        return Err(map_restic_command_error(
+            "DATABASE_RESTIC_FAILED",
+            "Restic could not store the deduplicated Time Machine snapshot.",
+            output,
+        ));
+    }
+
+    let snapshot_id = parse_restic_backup_snapshot_id(&output.stdout).ok_or_else(|| {
+        AppError::new_validation(
+            "DATABASE_RESTIC_FAILED",
+            "Restic stored the dump but DevNest could not read the Restic snapshot ID.",
+        )
+    })?;
+    Ok((snapshot_id, logical_dump_path))
+}
+
+fn forget_retained_restic_snapshots(
+    restic_binary: &Path,
+    workspace_dir: &Path,
+    snapshot_ids: &[String],
+) -> Result<(), AppError> {
+    if snapshot_ids.is_empty() {
+        return Ok(());
+    }
+
+    let paths = ensure_restic_repository(restic_binary, workspace_dir)?;
+    let output = restic_base_command(restic_binary, &paths)
+        .arg("forget")
+        .args(snapshot_ids)
+        .arg("--prune")
+        .output()
+        .map_err(|error| {
+            AppError::with_details(
+                "DATABASE_RESTIC_RETENTION_FAILED",
+                "DevNest could not start Restic retention cleanup.",
+                error.to_string(),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(map_restic_command_error(
+            "DATABASE_RESTIC_RETENTION_FAILED",
+            "Restic could not prune old deduplicated Time Machine snapshots.",
+            output,
+        ));
+    }
+
+    Ok(())
+}
+
+fn restore_restic_snapshot_to_temp_file(
+    restic_binary: &Path,
+    workspace_dir: &Path,
+    restic_snapshot_id: &str,
+    logical_dump_path: &str,
+) -> Result<PathBuf, AppError> {
+    let paths = restic_repository_paths(workspace_dir);
+    if !paths.repository_dir.join("config").exists() {
+        return Err(AppError::new_validation(
+            "DATABASE_RESTIC_NOT_READY",
+            "The deduplicated Time Machine repository is missing. Install Restic and take a fresh snapshot.",
+        ));
+    }
+
+    let output = restic_base_command(restic_binary, &paths)
+        .arg("dump")
+        .arg(restic_snapshot_id)
+        .arg(logical_dump_path)
+        .output()
+        .map_err(|error| {
+            AppError::with_details(
+                "DATABASE_RESTIC_RESTORE_FAILED",
+                "DevNest could not start Restic to read the selected deduplicated snapshot.",
+                error.to_string(),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(map_restic_command_error(
+            "DATABASE_RESTIC_RESTORE_FAILED",
+            "Restic could not read the selected deduplicated Time Machine snapshot.",
+            output,
+        ));
+    }
+    if output.stdout.is_empty() {
+        return Err(AppError::new_validation(
+            "DATABASE_RESTIC_RESTORE_FAILED",
+            "The selected deduplicated Time Machine snapshot is empty.",
+        ));
+    }
+
+    let temp_path = std::env::temp_dir().join(format!(
+        "devnest-restic-restore-{}.sql",
+        Uuid::new_v4().simple()
+    ));
+    fs::write(&temp_path, output.stdout).map_err(|error| {
+        AppError::with_details(
+            "DATABASE_RESTIC_RESTORE_FAILED",
+            "DevNest could not prepare the Restic snapshot for database rollback.",
+            error.to_string(),
+        )
+    })?;
+    Ok(temp_path)
+}
+
+fn temp_restore_dump_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "devnest-time-machine-restore-{}.sql",
+        Uuid::new_v4().simple()
+    ))
+}
+
+fn prepare_snapshot_restore_dump(
+    connection: &Connection,
+    workspace_dir: &Path,
+    restore_target: &database_time_machine::SnapshotRestoreTarget,
+) -> Result<PathBuf, AppError> {
+    if let Some(dump_path) = restore_target.dump_path.as_ref() {
+        let temp_path = temp_restore_dump_path();
+        fs::copy(dump_path, &temp_path).map_err(|error| {
+            AppError::with_details(
+                "DATABASE_ROLLBACK_FAILED",
+                "DevNest could not prepare the selected SQL snapshot for rollback.",
+                error.to_string(),
+            )
+        })?;
+        return Ok(temp_path);
+    }
+
+    let restic_binary = resolve_active_restic_binary(connection)?.ok_or_else(|| {
+        AppError::new_validation(
+            "DATABASE_RESTIC_NOT_INSTALLED",
+            "Install Restic from Optional Tools to restore deduplicated Time Machine snapshots.",
+        )
+    })?;
+    restore_restic_snapshot_to_temp_file(
+        &restic_binary,
+        workspace_dir,
+        restore_target
+            .restic_snapshot_id
+            .as_deref()
+            .ok_or_else(|| {
+                AppError::new_validation(
+                    "DATABASE_SNAPSHOT_INTEGRITY_FAILED",
+                    "The selected Restic snapshot is missing its repository snapshot ID.",
+                )
+            })?,
+        restore_target.logical_dump_path.as_deref().ok_or_else(|| {
+            AppError::new_validation(
+                "DATABASE_SNAPSHOT_INTEGRITY_FAILED",
+                "The selected Restic snapshot is missing its logical dump path.",
+            )
+        })?,
+    )
+}
+
 fn build_snapshot_result(
     workspace_dir: &Path,
     database_name: &str,
@@ -468,11 +805,36 @@ fn take_snapshot_inner(
 
     match dump_result {
         Ok(()) => {
-            let snapshot = database_time_machine::finalize_snapshot_capture(
-                workspace_dir,
-                database_name,
-                pending,
-            )?;
+            let snapshot = if let Some(restic_binary) = resolve_active_restic_binary(connection)? {
+                let (restic_snapshot_id, logical_dump_path) = store_pending_snapshot_with_restic(
+                    &restic_binary,
+                    workspace_dir,
+                    database_name,
+                    &pending,
+                )?;
+                let pending_dump_path = pending.dump_path.clone();
+                let (snapshot, retention) =
+                    database_time_machine::finalize_restic_snapshot_capture(
+                        workspace_dir,
+                        database_name,
+                        pending,
+                        restic_snapshot_id,
+                        logical_dump_path,
+                    )?;
+                fs::remove_file(pending_dump_path).ok();
+                forget_retained_restic_snapshots(
+                    &restic_binary,
+                    workspace_dir,
+                    &retention.removed_restic_snapshot_ids,
+                )?;
+                snapshot
+            } else {
+                database_time_machine::finalize_snapshot_capture(
+                    workspace_dir,
+                    database_name,
+                    pending,
+                )?
+            };
             build_snapshot_result(workspace_dir, database_name, snapshot)
         }
         Err(error) => {
@@ -928,6 +1290,8 @@ pub fn rollback_database_snapshot(
         "The target database does not exist anymore.",
     )?;
 
+    let restore_dump_path =
+        prepare_snapshot_restore_dump(&connection, &state.workspace_dir, &restore_target)?;
     let safety_snapshot = take_pre_action_snapshot_if_enabled(
         &connection,
         &state.workspace_dir,
@@ -935,15 +1299,17 @@ pub fn rollback_database_snapshot(
         "before rollback",
     )?;
     recreate_database(&client_binary, port, &database_name).map_err(map_auth_error)?;
-    run_mysql_restore_from_path(
+    let restore_result = run_mysql_restore_from_path(
         &client_binary,
         port,
         &database_name,
-        &restore_target.dump_path,
+        &restore_dump_path,
         "DATABASE_ROLLBACK_FAILED",
         "DevNest could not restore the selected managed snapshot into MySQL.",
     )
-    .map_err(map_auth_error)?;
+    .map_err(map_auth_error);
+    fs::remove_file(&restore_dump_path).ok();
+    restore_result?;
 
     Ok(DatabaseSnapshotRollbackResult {
         success: true,

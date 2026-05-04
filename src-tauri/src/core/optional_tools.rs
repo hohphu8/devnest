@@ -330,3 +330,35 @@ pub fn resolve_package_entry_path(
 
     Ok(entry_path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::list_optional_tool_packages;
+    use crate::models::optional_tool::OptionalToolType;
+    use std::path::Path;
+
+    #[test]
+    fn bundled_manifest_includes_phase_29_redis_and_restic_packages() {
+        let packages = list_optional_tool_packages(Path::new("missing-resources"))
+            .expect("bundled optional tool manifest should parse");
+
+        let redis = packages
+            .iter()
+            .find(|package| package.tool_type == OptionalToolType::Redis)
+            .expect("redis package should be present");
+        assert_eq!(redis.version, "8.6.2");
+        assert_eq!(
+            redis.entry_binary,
+            "Redis-8.6.2-Windows-x64-msys2/redis-server.exe"
+        );
+        assert!(redis.checksum_sha256.is_some());
+
+        let restic = packages
+            .iter()
+            .find(|package| package.tool_type == OptionalToolType::Restic)
+            .expect("restic package should be present");
+        assert_eq!(restic.version, "0.18.1");
+        assert!(restic.entry_binary.ends_with(".exe"));
+        assert!(restic.checksum_sha256.is_some());
+    }
+}

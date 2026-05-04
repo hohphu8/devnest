@@ -99,7 +99,7 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
 
         CREATE TABLE IF NOT EXISTS optional_tool_versions (
           id TEXT PRIMARY KEY NOT NULL,
-          tool_type TEXT NOT NULL CHECK(tool_type IN ('mailpit', 'cloudflared', 'phpmyadmin')),
+          tool_type TEXT NOT NULL CHECK(tool_type IN ('mailpit', 'cloudflared', 'phpmyadmin', 'redis', 'restic')),
           version TEXT NOT NULL,
           path TEXT NOT NULL,
           is_active INTEGER NOT NULL DEFAULT 1,
@@ -269,6 +269,7 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
     )?;
 
     migrate_optional_tool_versions_for_phpmyadmin(&connection)?;
+    migrate_optional_tool_versions_for_redis_restic(&connection)?;
     migrate_php_function_overrides(&connection)?;
     migrate_runtime_config_overrides(&connection)?;
     migrate_project_workers(&connection)?;
@@ -557,6 +558,69 @@ fn migrate_optional_tool_versions_for_phpmyadmin(connection: &Connection) -> Res
         FROM optional_tool_versions_legacy;
 
         DROP TABLE optional_tool_versions_legacy;
+        CREATE INDEX IF NOT EXISTS idx_optional_tool_versions_tool_type ON optional_tool_versions(tool_type);
+        ",
+    )?;
+    transaction.execute(
+        "
+        INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+        VALUES (?1, CURRENT_TIMESTAMP)
+        ",
+        [MIGRATION],
+    )?;
+    transaction.commit()?;
+
+    Ok(())
+}
+
+fn migrate_optional_tool_versions_for_redis_restic(
+    connection: &Connection,
+) -> Result<(), AppError> {
+    const MIGRATION: &str = "0011_optional_tools_redis_restic";
+    if migration_applied(connection, MIGRATION)? {
+        return Ok(());
+    }
+
+    let current_sql = connection
+        .query_row(
+            "
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'optional_tool_versions'
+            ",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    if current_sql
+        .as_deref()
+        .map(|sql| sql.contains("'redis'") && sql.contains("'restic'"))
+        .unwrap_or(false)
+    {
+        return record_migration(connection, MIGRATION);
+    }
+
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute_batch(
+        "
+        ALTER TABLE optional_tool_versions RENAME TO optional_tool_versions_phase29_legacy;
+
+        CREATE TABLE optional_tool_versions (
+          id TEXT PRIMARY KEY NOT NULL,
+          tool_type TEXT NOT NULL CHECK(tool_type IN ('mailpit', 'cloudflared', 'phpmyadmin', 'redis', 'restic')),
+          version TEXT NOT NULL,
+          path TEXT NOT NULL,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        INSERT INTO optional_tool_versions (id, tool_type, version, path, is_active, created_at, updated_at)
+        SELECT id, tool_type, version, path, is_active, created_at, updated_at
+        FROM optional_tool_versions_phase29_legacy;
+
+        DROP TABLE optional_tool_versions_phase29_legacy;
         CREATE INDEX IF NOT EXISTS idx_optional_tool_versions_tool_type ON optional_tool_versions(tool_type);
         ",
     )?;
@@ -1140,4 +1204,84 @@ fn migrate_repair_project_foreign_keys(connection: &Connection) -> Result<(), Ap
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::init_database;
+    use rusqlite::{Connection, params};
+    use std::fs;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn temp_db_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("devnest-{name}-{}.sqlite", Uuid::new_v4()))
+    }
+
+    #[test]
+    fn optional_tool_migration_preserves_rows_and_accepts_redis_restic() {
+        let db_path = temp_db_path("optional-tools-phase29");
+        let connection = Connection::open(&db_path).expect("legacy db should open");
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE schema_migrations (
+                    version TEXT PRIMARY KEY NOT NULL,
+                    applied_at TEXT NOT NULL
+                );
+
+                CREATE TABLE optional_tool_versions (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    tool_type TEXT NOT NULL CHECK(tool_type IN ('mailpit', 'cloudflared')),
+                    version TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES ('0001_initial_schema', CURRENT_TIMESTAMP);
+
+                INSERT INTO optional_tool_versions (
+                    id, tool_type, version, path, is_active, created_at, updated_at
+                )
+                VALUES (
+                    'mailpit-1.29.7', 'mailpit', '1.29.7',
+                    'D:\\devnest\\optional-tools\\mailpit.exe', 1,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                );
+                ",
+            )
+            .expect("legacy optional tool schema should seed");
+        drop(connection);
+
+        init_database(&db_path).expect("database migrations should run");
+
+        let connection = Connection::open(&db_path).expect("migrated db should open");
+        let mailpit_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM optional_tool_versions WHERE tool_type = 'mailpit'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("legacy row should be queryable");
+        assert_eq!(mailpit_count, 1);
+
+        for tool_type in ["redis", "restic"] {
+            connection
+                .execute(
+                    "
+                    INSERT INTO optional_tool_versions (
+                        id, tool_type, version, path, is_active, created_at, updated_at
+                    )
+                    VALUES (?1, ?2, '1.0.0', 'D:\\devnest\\optional-tools\\tool.exe', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ",
+                    params![format!("{tool_type}-1.0.0"), tool_type],
+                )
+                .expect("phase 29 optional tool type should be accepted");
+        }
+
+        fs::remove_file(db_path).ok();
+    }
 }

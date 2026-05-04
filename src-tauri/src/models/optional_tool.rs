@@ -7,6 +7,8 @@ pub enum OptionalToolType {
     Mailpit,
     Cloudflared,
     Phpmyadmin,
+    Redis,
+    Restic,
 }
 
 impl OptionalToolType {
@@ -15,6 +17,8 @@ impl OptionalToolType {
             Self::Mailpit => "mailpit",
             Self::Cloudflared => "cloudflared",
             Self::Phpmyadmin => "phpmyadmin",
+            Self::Redis => "redis",
+            Self::Restic => "restic",
         }
     }
 
@@ -23,6 +27,8 @@ impl OptionalToolType {
             Self::Mailpit => "Mailpit",
             Self::Cloudflared => "cloudflared",
             Self::Phpmyadmin => "phpMyAdmin",
+            Self::Redis => "Redis",
+            Self::Restic => "Restic",
         }
     }
 }
@@ -35,6 +41,8 @@ impl FromStr for OptionalToolType {
             "mailpit" => Ok(Self::Mailpit),
             "cloudflared" => Ok(Self::Cloudflared),
             "phpmyadmin" => Ok(Self::Phpmyadmin),
+            "redis" => Ok(Self::Redis),
+            "restic" => Ok(Self::Restic),
             _ => Err("Invalid optional tool type"),
         }
     }

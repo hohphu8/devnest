@@ -225,6 +225,7 @@ fn discover_service_binary(service: &ServiceName) -> Option<PathBuf> {
 fn optional_tool_type_for_service(service: &ServiceName) -> Option<OptionalToolType> {
     match service {
         ServiceName::Mailpit => Some(OptionalToolType::Mailpit),
+        ServiceName::Redis => Some(OptionalToolType::Redis),
         _ => None,
     }
 }
@@ -383,13 +384,18 @@ fn is_runtime_suppressed(
     RuntimeSuppressionRepository::is_suppressed(connection, runtime_type, path)
 }
 
-pub fn resolve_service_binary(
+fn resolve_service_binary_with_options(
     connection: &Connection,
     service: &ServiceName,
+    include_optional_tools: bool,
 ) -> Result<PathBuf, AppError> {
-    if let Some(tool_type) = optional_tool_type_for_service(service) {
-        if let Some(candidate) = resolve_optional_tool_path_from_registry(connection, &tool_type)? {
-            return Ok(candidate);
+    if include_optional_tools {
+        if let Some(tool_type) = optional_tool_type_for_service(service) {
+            if let Some(candidate) =
+                resolve_optional_tool_path_from_registry(connection, &tool_type)?
+            {
+                return Ok(candidate);
+            }
         }
     }
 
@@ -456,6 +462,13 @@ pub fn resolve_service_binary(
         "RUNTIME_BINARY_NOT_CONFIGURED",
         message,
     ))
+}
+
+pub fn resolve_service_binary(
+    connection: &Connection,
+    service: &ServiceName,
+) -> Result<PathBuf, AppError> {
+    resolve_service_binary_with_options(connection, service, true)
 }
 
 pub fn resolve_php_binary(connection: &Connection, version: &str) -> Result<PathBuf, AppError> {
@@ -1686,7 +1699,7 @@ fn build_frankenphp_bootstrap_config(
     })?;
 
     let content = format!(
-        "{{\n    admin off\n    persist_config off\n    http_port {port}\n    https_port 443\n}}\n\nimport \"{import_glob}\"\n\nhttp://localhost:{port} {{\n    root * \"{runtime_home}\"\n    respond \"DevNest FrankenPHP runtime is ready.\" 200\n}}\n",
+        "{{\n    admin off\n    persist_config off\n    http_port {port}\n    https_port 443\n}}\n\nimport \"{import_glob}\"\n\nhttp://127.0.0.1:{port} {{\n    root * \"{runtime_home}\"\n    respond \"DevNest FrankenPHP runtime is ready.\" 200\n}}\n",
         port = port,
         import_glob = import_glob,
         runtime_home = runtime_home,
@@ -1823,12 +1836,13 @@ fn build_mysql_bootstrap_config(
     })?;
 
     let config_path = state_dir.join("my.ini");
+    let bind_address = mysql_bind_address(runtime_home);
     let content = format!(
         "[mysqld]\n\
          basedir={basedir}\n\
          datadir={datadir}\n\
          port={port}\n\
-         bind-address=127.0.0.1\n\
+         bind-address={bind_address}\n\
          plugin-dir={plugin_dir}\n\
          tmpdir={tmp_dir}\n\
          skip-log-bin\n\
@@ -1836,12 +1850,71 @@ fn build_mysql_bootstrap_config(
          collation-server=utf8mb4_unicode_ci\n",
         basedir = normalize_for_config(runtime_home),
         datadir = normalize_for_config(&data_dir),
+        bind_address = bind_address,
         plugin_dir = normalize_for_config(&runtime_home.join("lib").join("plugin")),
         tmp_dir = normalize_for_config(&tmp_dir),
     );
     write_text_file(&config_path, &content)?;
 
     Ok(config_path)
+}
+
+fn mysql_bind_address(runtime_home: &Path) -> &'static str {
+    let runtime_home = runtime_home.to_string_lossy().to_ascii_lowercase();
+    if runtime_home.contains("mariadb") {
+        "127.0.0.1,::1"
+    } else {
+        "127.0.0.1"
+    }
+}
+
+fn build_redis_bootstrap_config(workspace_dir: &Path, port: u16) -> Result<PathBuf, AppError> {
+    let state_dir = managed_service_state_dir(workspace_dir, &ServiceName::Redis);
+    let config_path = state_dir.join("redis.conf");
+    let acl_path = state_dir.join("users.acl");
+    let data_dir = state_dir.join("data");
+
+    fs::create_dir_all(&data_dir).map_err(|error| {
+        AppError::with_details(
+            "SERVICE_CONFIG_WRITE_FAILED",
+            "Could not create the Redis service state directory.",
+            error.to_string(),
+        )
+    })?;
+
+    write_text_file(&acl_path, "user default on nopass ~* &* +@all\n")?;
+
+    let content = format!(
+        "bind 127.0.0.1 ::1\n\
+         protected-mode yes\n\
+         port {port}\n\
+         daemonize no\n\
+         save \"\"\n\
+         appendonly no\n\
+         dir \"{data_dir}\"\n\
+         aclfile \"{acl_path}\"\n",
+        data_dir = normalize_for_config(&data_dir),
+        acl_path = normalize_for_config(&acl_path),
+    );
+    write_text_file(&config_path, &content)?;
+
+    Ok(config_path)
+}
+
+fn binary_matches_active_optional_tool(
+    connection: &Connection,
+    service: &ServiceName,
+    binary_path: &Path,
+) -> Result<bool, AppError> {
+    let Some(tool_type) = optional_tool_type_for_service(service) else {
+        return Ok(false);
+    };
+    let Some(optional_path) = resolve_optional_tool_path_from_registry(connection, &tool_type)?
+    else {
+        return Ok(false);
+    };
+
+    Ok(optional_path == binary_path)
 }
 
 pub fn service_log_path(workspace_dir: &Path, service: &ServiceName) -> PathBuf {
@@ -1860,6 +1933,24 @@ pub fn resolve_service_runtime(
     service: ServiceName,
 ) -> Result<RuntimeCommand, AppError> {
     let binary_path = resolve_service_binary(connection, &service)?;
+    build_service_runtime(connection, workspace_dir, service, binary_path)
+}
+
+pub fn resolve_service_runtime_without_optional_tool(
+    connection: &Connection,
+    workspace_dir: &Path,
+    service: ServiceName,
+) -> Result<RuntimeCommand, AppError> {
+    let binary_path = resolve_service_binary_with_options(connection, &service, false)?;
+    build_service_runtime(connection, workspace_dir, service, binary_path)
+}
+
+fn build_service_runtime(
+    connection: &Connection,
+    workspace_dir: &Path,
+    service: ServiceName,
+    binary_path: PathBuf,
+) -> Result<RuntimeCommand, AppError> {
     let port = parse_service_port(&service)?;
     let args = env::var(service_args_env_key(&service))
         .ok()
@@ -1962,19 +2053,31 @@ pub fn resolve_service_runtime(
                 ],
                 Some(runtime_home.clone()),
             ),
-            ServiceName::Redis => (
-                vec![
-                    "--bind".to_string(),
-                    "127.0.0.1".to_string(),
-                    "--port".to_string(),
-                    port.unwrap_or(6379).to_string(),
-                    "--save".to_string(),
-                    "".to_string(),
-                    "--appendonly".to_string(),
-                    "no".to_string(),
-                ],
-                Some(runtime_home.clone()),
-            ),
+            ServiceName::Redis => {
+                if binary_matches_active_optional_tool(connection, &service, &binary_path)? {
+                    let config_path =
+                        build_redis_bootstrap_config(workspace_dir, port.unwrap_or(6379))?;
+                    (
+                        vec![config_path.to_string_lossy().to_string()],
+                        Some(runtime_home.clone()),
+                    )
+                } else {
+                    (
+                        vec![
+                            "--bind".to_string(),
+                            "127.0.0.1".to_string(),
+                            "::1".to_string(),
+                            "--port".to_string(),
+                            port.unwrap_or(6379).to_string(),
+                            "--save".to_string(),
+                            "".to_string(),
+                            "--appendonly".to_string(),
+                            "no".to_string(),
+                        ],
+                        Some(runtime_home.clone()),
+                    )
+                }
+            }
         }
     } else {
         (args, working_dir)
@@ -2095,7 +2198,8 @@ mod tests {
     use crate::models::service::ServiceName;
     use crate::storage::db::init_database;
     use crate::storage::repositories::{
-        RuntimeConfigOverrideRepository, RuntimeSuppressionRepository, RuntimeVersionRepository,
+        OptionalToolVersionRepository, RuntimeConfigOverrideRepository,
+        RuntimeSuppressionRepository, RuntimeVersionRepository,
     };
     use rusqlite::Connection;
     use std::collections::BTreeMap;
@@ -2482,6 +2586,7 @@ mod tests {
         assert!(runtime.args.iter().any(|arg| arg == "--console"));
         assert!(config_content.contains("basedir="));
         assert!(config_content.contains("datadir="));
+        assert!(config_content.contains("bind-address=127.0.0.1,::1"));
         assert!(config_content.contains("plugin-dir="));
 
         fs::remove_dir_all(root).ok();
@@ -2535,6 +2640,56 @@ mod tests {
         assert!(runtime.args.iter().any(|arg| arg == "--bind"));
         assert!(runtime.args.iter().any(|arg| arg == "--appendonly"));
         assert_eq!(runtime.working_dir.as_deref(), Some(root.as_path()));
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn resolves_managed_redis_optional_tool_before_env_binary() {
+        let _guard = env_lock().lock().expect("env lock should succeed");
+        let (db_path, connection) = setup_test_db();
+        let root = make_root("devnest-managed-redis-runtime");
+        let workspace_dir = root.join("workspace");
+        let managed_binary = root.join("managed").join("redis-server.exe");
+        let env_binary = root.join("env").join("redis-server.exe");
+
+        fs::create_dir_all(managed_binary.parent().expect("managed parent"))
+            .expect("managed redis dir should exist");
+        fs::create_dir_all(env_binary.parent().expect("env parent"))
+            .expect("env redis dir should exist");
+        fs::create_dir_all(&workspace_dir).expect("workspace should exist");
+        fs::write(&managed_binary, "fake").expect("managed redis binary should write");
+        fs::write(&env_binary, "fake").expect("env redis binary should write");
+
+        OptionalToolVersionRepository::upsert(
+            &connection,
+            &crate::models::optional_tool::OptionalToolType::Redis,
+            "8.6.2",
+            &managed_binary.to_string_lossy(),
+            true,
+        )
+        .expect("redis optional tool should upsert");
+        set_env_var("DEVNEST_RUNTIME_REDIS_BIN", &env_binary);
+
+        let runtime = resolve_service_runtime(&connection, &workspace_dir, ServiceName::Redis)
+            .expect("redis runtime should resolve");
+        remove_env_var("DEVNEST_RUNTIME_REDIS_BIN");
+
+        assert_eq!(runtime.binary_path, managed_binary);
+        assert_eq!(runtime.port, Some(6379));
+        assert_eq!(runtime.args.len(), 1);
+        let config_content =
+            fs::read_to_string(&runtime.args[0]).expect("redis config should exist");
+        let acl_path = workspace_dir
+            .join("service-state")
+            .join("redis")
+            .join("users.acl");
+        let acl_content = fs::read_to_string(&acl_path).expect("redis acl should exist");
+        assert!(config_content.contains("bind 127.0.0.1"));
+        assert!(config_content.contains("appendonly no"));
+        assert!(config_content.contains("aclfile"));
+        assert_eq!(acl_content, "user default on nopass ~* &* +@all\n");
 
         fs::remove_dir_all(root).ok();
         fs::remove_file(db_path).ok();

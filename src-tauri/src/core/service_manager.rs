@@ -145,6 +145,23 @@ fn save_error_state(
     )
 }
 
+struct StartedServiceRuntime {
+    pid: u32,
+    port: Option<u16>,
+    process: ManagedServiceProcess,
+}
+
+struct ImmediateServiceExit {
+    port: Option<u16>,
+    message: String,
+    details: String,
+}
+
+enum ServiceRuntimeStart {
+    Running(StartedServiceRuntime),
+    Exited(ImmediateServiceExit),
+}
+
 fn php_process_key(version: &str) -> String {
     format!("php-{version}")
 }
@@ -880,51 +897,10 @@ pub fn get_all_service_status(
         .collect()
 }
 
-pub fn start_service(
-    connection: &Connection,
-    state: &AppState,
-    service: ServiceName,
-) -> Result<ServiceState, AppError> {
-    let current = get_service_status(connection, state, service.clone())?;
-    if matches!(current.status, ServiceStatus::Running) && current.pid.is_some() {
-        return Ok(current);
-    }
-
-    let runtime = runtime_registry::resolve_service_runtime(
-        connection,
-        &state.workspace_dir,
-        service.clone(),
-    )?;
-    guard_service_ports(&service, runtime.port)?;
-    if is_managed_web_service(&service) && service_requires_https_port(connection, &service)? {
-        let https_port_check = ports::check_port(443)?;
-        if !https_port_check.available {
-            return Err(AppError::with_details(
-                "PORT_IN_USE",
-                format!(
-                    "Port 443 is already in use by {}. Stop the conflicting process before starting {} with HTTPS-enabled sites.",
-                    https_port_check
-                        .process_name
-                        .as_deref()
-                        .unwrap_or("another process"),
-                    service.display_name()
-                ),
-                format!(
-                    "pid={:?}, processName={:?}",
-                    https_port_check.pid, https_port_check.process_name
-                ),
-            ));
-        }
-    }
-
-    if is_managed_web_service(&service) {
-        sync_managed_configs_for_service(connection, state, &service)?;
-        ensure_frankenphp_runtime_compatibility(connection, &service)?;
-    }
-    if service_uses_php_fastcgi(&service) {
-        ensure_php_fastcgi_processes(connection, state, &service)?;
-    }
-
+fn start_runtime_process(
+    service: &ServiceName,
+    runtime: runtime_registry::RuntimeCommand,
+) -> Result<ServiceRuntimeStart, AppError> {
     if let Some(parent) = runtime.log_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             AppError::with_details(
@@ -977,10 +953,6 @@ pub fn start_service(
     }
 
     let mut child = command.spawn().map_err(|error| {
-        if service_uses_php_fastcgi(&service) {
-            let _ = stop_php_fastcgi_processes(state);
-        }
-
         AppError::with_details(
             "SERVICE_START_FAILED",
             format!("Could not start {}.", service.display_name()),
@@ -992,65 +964,182 @@ pub fn start_service(
     match child.try_wait() {
         Ok(Some(status)) => {
             let log_tail = log_reader::read_tail(&runtime.log_path, 20)?;
-            let error_message = status_message(&service, &status).unwrap_or_else(|| {
+            let message = status_message(service, &status).unwrap_or_else(|| {
                 format!(
                     "{} exited immediately after launch.",
                     service.display_name()
                 )
             });
-            let _ = save_error_state(connection, &service, runtime.port, &error_message);
-            if service_uses_php_fastcgi(&service) {
-                let _ = stop_php_fastcgi_processes(state);
-            }
-
-            return Err(AppError::with_details(
-                "SERVICE_START_FAILED",
-                error_message,
-                if log_tail.is_empty() {
+            Ok(ServiceRuntimeStart::Exited(ImmediateServiceExit {
+                port: runtime.port,
+                message,
+                details: if log_tail.is_empty() {
                     "No log output was captured.".to_string()
                 } else {
                     log_tail
                 },
-            ));
+            }))
         }
-        Ok(None) => {}
-        Err(error) => {
-            let _ = save_error_state(
-                connection,
-                &service,
-                runtime.port,
-                "The service started but its process state could not be verified.",
-            );
-            if service_uses_php_fastcgi(&service) {
-                let _ = stop_php_fastcgi_processes(state);
-            }
-
-            return Err(AppError::with_details(
-                "SERVICE_START_FAILED",
-                format!(
-                    "Could not confirm that {} is running.",
-                    service.display_name()
-                ),
-                error.to_string(),
-            ));
+        Ok(None) => {
+            let pid = child.id();
+            Ok(ServiceRuntimeStart::Running(StartedServiceRuntime {
+                pid,
+                port: runtime.port,
+                process: ManagedServiceProcess {
+                    pid,
+                    child,
+                    log_path: runtime.log_path,
+                },
+            }))
         }
+        Err(error) => Err(AppError::with_details(
+            "SERVICE_START_FAILED",
+            format!(
+                "Could not confirm that {} is running.",
+                service.display_name()
+            ),
+            error.to_string(),
+        )),
     }
+}
 
-    let pid = child.id();
+fn save_started_runtime(
+    connection: &Connection,
+    state: &AppState,
+    service: &ServiceName,
+    started: StartedServiceRuntime,
+) -> Result<ServiceState, AppError> {
+    let pid = started.pid;
+    let port = started.port;
     state
         .managed_processes
         .lock()
         .map_err(|_| mutex_error())?
-        .insert(
-            service.as_str().to_string(),
-            ManagedServiceProcess {
-                pid,
-                child,
-                log_path: runtime.log_path,
-            },
-        );
+        .insert(service.as_str().to_string(), started.process);
 
-    save_running_state(connection, &service, pid, runtime.port)
+    save_running_state(connection, service, pid, port)
+}
+
+fn redis_should_try_system_fallback(
+    service: &ServiceName,
+    original: &ImmediateServiceExit,
+    fallback_runtime: &runtime_registry::RuntimeCommand,
+    managed_runtime: &runtime_registry::RuntimeCommand,
+) -> bool {
+    matches!(service, ServiceName::Redis)
+        && fallback_runtime.binary_path != managed_runtime.binary_path
+        && (original
+            .details
+            .to_ascii_lowercase()
+            .contains("couldn't create signal pipe")
+            || original.message.contains("exit code 1"))
+}
+
+pub fn start_service(
+    connection: &Connection,
+    state: &AppState,
+    service: ServiceName,
+) -> Result<ServiceState, AppError> {
+    let current = get_service_status(connection, state, service.clone())?;
+    if matches!(current.status, ServiceStatus::Running) && current.pid.is_some() {
+        return Ok(current);
+    }
+
+    let runtime = runtime_registry::resolve_service_runtime(
+        connection,
+        &state.workspace_dir,
+        service.clone(),
+    )?;
+    guard_service_ports(&service, runtime.port)?;
+    if is_managed_web_service(&service) && service_requires_https_port(connection, &service)? {
+        let https_port_check = ports::check_port(443)?;
+        if !https_port_check.available {
+            return Err(AppError::with_details(
+                "PORT_IN_USE",
+                format!(
+                    "Port 443 is already in use by {}. Stop the conflicting process before starting {} with HTTPS-enabled sites.",
+                    https_port_check
+                        .process_name
+                        .as_deref()
+                        .unwrap_or("another process"),
+                    service.display_name()
+                ),
+                format!(
+                    "pid={:?}, processName={:?}",
+                    https_port_check.pid, https_port_check.process_name
+                ),
+            ));
+        }
+    }
+
+    if is_managed_web_service(&service) {
+        sync_managed_configs_for_service(connection, state, &service)?;
+        ensure_frankenphp_runtime_compatibility(connection, &service)?;
+    }
+    if service_uses_php_fastcgi(&service) {
+        ensure_php_fastcgi_processes(connection, state, &service)?;
+    }
+
+    match start_runtime_process(&service, runtime.clone()) {
+        Ok(ServiceRuntimeStart::Running(started)) => {
+            save_started_runtime(connection, state, &service, started)
+        }
+        Ok(ServiceRuntimeStart::Exited(exit)) => {
+            if matches!(service, ServiceName::Redis) {
+                if let Ok(fallback_runtime) =
+                    runtime_registry::resolve_service_runtime_without_optional_tool(
+                        connection,
+                        &state.workspace_dir,
+                        service.clone(),
+                    )
+                {
+                    if redis_should_try_system_fallback(
+                        &service,
+                        &exit,
+                        &fallback_runtime,
+                        &runtime,
+                    ) {
+                        match start_runtime_process(&service, fallback_runtime) {
+                            Ok(ServiceRuntimeStart::Running(started)) => {
+                                return save_started_runtime(connection, state, &service, started);
+                            }
+                            Ok(ServiceRuntimeStart::Exited(fallback_exit)) => {
+                                let _ = save_error_state(
+                                    connection,
+                                    &service,
+                                    fallback_exit.port,
+                                    &fallback_exit.message,
+                                );
+                                return Err(AppError::with_details(
+                                    "SERVICE_START_FAILED",
+                                    fallback_exit.message,
+                                    fallback_exit.details,
+                                ));
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                }
+            }
+
+            let _ = save_error_state(connection, &service, exit.port, &exit.message);
+            if service_uses_php_fastcgi(&service) {
+                let _ = stop_php_fastcgi_processes(state);
+            }
+
+            Err(AppError::with_details(
+                "SERVICE_START_FAILED",
+                exit.message,
+                exit.details,
+            ))
+        }
+        Err(error) => {
+            if service_uses_php_fastcgi(&service) {
+                let _ = stop_php_fastcgi_processes(state);
+            }
+            Err(error)
+        }
+    }
 }
 
 pub fn stop_service(

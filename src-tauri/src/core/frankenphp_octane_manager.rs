@@ -447,7 +447,7 @@ fn worker_metrics(admin_port: i64) -> (bool, Option<i64>) {
         return (false, None);
     };
 
-    let url = format!("http://localhost:{admin_port}/metrics");
+    let url = format!("http://127.0.0.1:{admin_port}/metrics");
     let Ok(response) = client
         .get(url)
         .send()
@@ -1687,7 +1687,7 @@ fn generate_managed_worker_caddyfile(
     ));
 
     let config = format!(
-        "{{\n    admin localhost:{admin_port}\n    auto_https off\n}}\n\nhttp://:{worker_port} {{\n    bind 127.0.0.1\n    root * \"{document_root}\"\n    encode zstd br gzip\n    php_server {{\n        root \"{document_root}\"\n        worker {{\n            file \"{worker_file}\"\n            num {workers}\n{worker_env}        }}\n    }}\n    file_server\n    log {{\n        output file \"{log_path}\"\n    }}\n}}\n",
+        "{{\n    admin 127.0.0.1:{admin_port}\n    auto_https off\n}}\n\nhttp://:{worker_port} {{\n    bind 127.0.0.1\n    root * \"{document_root}\"\n    encode zstd br gzip\n    php_server {{\n        root \"{document_root}\"\n        worker {{\n            file \"{worker_file}\"\n            num {workers}\n{worker_env}        }}\n    }}\n    file_server\n    log {{\n        output file \"{log_path}\"\n    }}\n}}\n",
         admin_port = settings.admin_port,
         worker_port = settings.worker_port,
         document_root = caddy_path(&document_root),
@@ -2003,7 +2003,7 @@ pub fn start(
     command.env("REQUEST_MAX_EXECUTION_TIME", "30");
     command.env("CADDY_GLOBAL_OPTIONS", "auto_https disable_redirects");
     command.env("CADDY_EXTRA_CONFIG", "");
-    command.env("CADDY_SERVER_ADMIN_HOST", "localhost");
+    command.env("CADDY_SERVER_ADMIN_HOST", "127.0.0.1");
     command.env("CADDY_SERVER_ADMIN_PORT", settings.admin_port.to_string());
     command.env("CADDY_SERVER_LOG_LEVEL", "INFO");
     command.env("CADDY_SERVER_LOGGER", "json");
@@ -2136,7 +2136,7 @@ pub fn reload(
     }
 
     let admin_config_url = format!(
-        "http://localhost:{}/config/apps/frankenphp",
+        "http://127.0.0.1:{}/config/apps/frankenphp",
         status.admin_port
     );
     let client = reqwest::blocking::Client::new();

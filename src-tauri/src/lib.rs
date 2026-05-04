@@ -118,6 +118,7 @@ use crate::models::service::{ServiceName, ServiceStatus};
 use crate::state::{AppState, MobilePreviewSession};
 use crate::storage::db::init_database;
 use crate::storage::repositories::ProjectRepository;
+use crate::utils::launch_at_login;
 use crate::utils::perf;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -237,6 +238,17 @@ fn start_database_time_machine_scheduler(state: &AppState) {
                 thread::sleep(Duration::from_secs(60));
             }
         });
+}
+
+fn ensure_launch_at_login_registered() {
+    let Ok(app_path) = std::env::current_exe() else {
+        eprintln!("DevNest launch-at-login sync skipped: could not resolve current executable.");
+        return;
+    };
+
+    if let Err(error) = launch_at_login::ensure_launch_at_login(&app_path) {
+        eprintln!("DevNest launch-at-login sync failed: {}", error);
+    }
 }
 
 fn start_background_boot_tasks<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
@@ -359,6 +371,9 @@ pub fn run() {
             php_cli_environment::sync_active_php_cli_environment(&connection, &workspace_dir)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
             perf::log_elapsed("boot php cli sync", phase_started_at);
+            let phase_started_at = Instant::now();
+            ensure_launch_at_login_registered();
+            perf::log_elapsed("boot launch at login sync", phase_started_at);
 
             let state = AppState {
                 db_path,

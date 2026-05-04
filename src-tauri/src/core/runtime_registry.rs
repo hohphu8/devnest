@@ -1871,7 +1871,6 @@ fn mysql_bind_address(runtime_home: &Path) -> &'static str {
 fn build_redis_bootstrap_config(workspace_dir: &Path, port: u16) -> Result<PathBuf, AppError> {
     let state_dir = managed_service_state_dir(workspace_dir, &ServiceName::Redis);
     let config_path = state_dir.join("redis.conf");
-    let acl_path = state_dir.join("users.acl");
     let data_dir = state_dir.join("data");
 
     fs::create_dir_all(&data_dir).map_err(|error| {
@@ -1882,8 +1881,6 @@ fn build_redis_bootstrap_config(workspace_dir: &Path, port: u16) -> Result<PathB
         )
     })?;
 
-    write_text_file(&acl_path, "user default on nopass ~* &* +@all\n")?;
-
     let content = format!(
         "bind 127.0.0.1 ::1\n\
          protected-mode yes\n\
@@ -1891,10 +1888,8 @@ fn build_redis_bootstrap_config(workspace_dir: &Path, port: u16) -> Result<PathB
          daemonize no\n\
          save \"\"\n\
          appendonly no\n\
-         dir \"{data_dir}\"\n\
-         aclfile \"{acl_path}\"\n",
+         dir \"{data_dir}\"\n",
         data_dir = normalize_for_config(&data_dir),
-        acl_path = normalize_for_config(&acl_path),
     );
     write_text_file(&config_path, &content)?;
 
@@ -2681,15 +2676,9 @@ mod tests {
         assert_eq!(runtime.args.len(), 1);
         let config_content =
             fs::read_to_string(&runtime.args[0]).expect("redis config should exist");
-        let acl_path = workspace_dir
-            .join("service-state")
-            .join("redis")
-            .join("users.acl");
-        let acl_content = fs::read_to_string(&acl_path).expect("redis acl should exist");
         assert!(config_content.contains("bind 127.0.0.1"));
         assert!(config_content.contains("appendonly no"));
-        assert!(config_content.contains("aclfile"));
-        assert_eq!(acl_content, "user default on nopass ~* &* +@all\n");
+        assert!(!config_content.contains("aclfile"));
 
         fs::remove_dir_all(root).ok();
         fs::remove_file(db_path).ok();

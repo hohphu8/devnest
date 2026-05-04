@@ -17,6 +17,7 @@ pub mod project_scheduled_tasks;
 pub mod project_workers;
 pub mod projects;
 pub mod recipes;
+pub mod redis_manager;
 pub mod reliability;
 pub mod runtime_configs;
 pub mod runtimes;

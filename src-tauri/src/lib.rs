@@ -83,6 +83,10 @@ use crate::commands::projects::{
     open_project_terminal, open_project_vscode, pick_project_folder, scan_project, update_project,
 };
 use crate::commands::recipes::{clone_git_recipe, create_laravel_recipe, create_wordpress_recipe};
+use crate::commands::redis_manager::{
+    clear_redis_database, delete_redis_keys, get_redis_key, get_redis_manager_status,
+    list_redis_keys, set_redis_string_key,
+};
 use crate::commands::reliability::{
     backup_app_metadata, export_diagnostics_bundle, inspect_reliability_state,
     list_repair_workflows, restore_app_metadata, run_action_preflight, run_repair_workflow,
@@ -450,6 +454,12 @@ pub fn run() {
             backup_app_metadata,
             restore_app_metadata,
             run_repair_workflow,
+            get_redis_manager_status,
+            list_redis_keys,
+            get_redis_key,
+            set_redis_string_key,
+            delete_redis_keys,
+            clear_redis_database,
             open_project_folder,
             open_project_terminal,
             open_project_vscode,

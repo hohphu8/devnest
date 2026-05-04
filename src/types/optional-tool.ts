@@ -1,4 +1,4 @@
-export type OptionalToolType = "mailpit" | "cloudflared" | "phpmyadmin";
+export type OptionalToolType = "mailpit" | "cloudflared" | "phpmyadmin" | "redis" | "restic";
 export type OptionalToolHealthStatus = "available" | "missing";
 export type OptionalToolArchiveKind = "zip" | "binary";
 export type OptionalToolInstallStage =

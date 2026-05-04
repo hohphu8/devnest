@@ -11,6 +11,7 @@ export interface DatabaseTransferResult {
 
 export type DatabaseTimeMachineState = "off" | "protected" | "busy" | "error";
 export type DatabaseSnapshotTriggerSource = "manual" | "pre-action" | "scheduled";
+export type DatabaseSnapshotStorageBackend = "sql" | "restic";
 
 export interface DatabaseTimeMachineStatus {
   name: string;
@@ -31,6 +32,9 @@ export interface DatabaseSnapshotSummary {
   createdAt: string;
   triggerSource: DatabaseSnapshotTriggerSource;
   sizeBytes: number;
+  storageBackend: DatabaseSnapshotStorageBackend;
+  resticSnapshotId?: string | null;
+  logicalDumpPath?: string | null;
   linkedProjectNames: string[];
   scheduledIntervalMinutes?: number | null;
   note?: string | null;

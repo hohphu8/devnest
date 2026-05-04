@@ -230,6 +230,9 @@ function readMockDatabaseSnapshots(): Record<string, DatabaseSnapshotSummary[]> 
       databaseName,
       snapshots.map((snapshot) => ({
         ...snapshot,
+        storageBackend: snapshot.storageBackend ?? "sql",
+        resticSnapshotId: snapshot.resticSnapshotId ?? null,
+        logicalDumpPath: snapshot.logicalDumpPath ?? null,
         linkedProjectNames: snapshot.linkedProjectNames ?? [],
         scheduledIntervalMinutes: snapshot.scheduledIntervalMinutes ?? null,
       })),
@@ -378,6 +381,9 @@ function createMockSnapshot(
     createdAt: timestamp,
     triggerSource,
     sizeBytes: 1024 * Math.max(1, current.length + 1),
+    storageBackend: "sql",
+    resticSnapshotId: null,
+    logicalDumpPath: null,
     linkedProjectNames: options?.linkedProjectNames ?? mockLinkedProjectNamesForDatabase(name),
     scheduledIntervalMinutes: options?.scheduledIntervalMinutes ?? null,
     note: options?.note ?? null,
@@ -1684,6 +1690,32 @@ function defaultMockOptionalToolPackages(): OptionalToolPackage[] {
       checksumSha256: "272c1fabc6297302cbb187f4e603d4be4330907b537354a443ee154c4e0ed8a3",
       archiveKind: "binary",
       entryBinary: "cloudflared.exe",
+      notes: "Preview catalog entry.",
+    },
+    {
+      id: "redis-8.6.2-win-x64-msys2",
+      toolType: "redis",
+      version: "8.6.2",
+      platform: "windows",
+      arch: "x64",
+      displayName: "Redis 8.6.2",
+      downloadUrl: "https://github.com/redis-windows/redis-windows/releases/download/8.6.2/Redis-8.6.2-Windows-x64-msys2.zip",
+      checksumSha256: "c2bcaa8ce0f4b942f749c491327dcf126a98169e0bde59013251e179d6f86b8b",
+      archiveKind: "zip",
+      entryBinary: "Redis-8.6.2-Windows-x64-msys2/redis-server.exe",
+      notes: "Preview catalog entry.",
+    },
+    {
+      id: "restic-0.18.1-win-x64",
+      toolType: "restic",
+      version: "0.18.1",
+      platform: "windows",
+      arch: "x64",
+      displayName: "Restic 0.18.1",
+      downloadUrl: "https://github.com/restic/restic/releases/download/v0.18.1/restic_0.18.1_windows_amd64.zip",
+      checksumSha256: "0c1a713440578cb400d2e76208feb24f1b339426b075a21f73b6b2132692515d",
+      archiveKind: "zip",
+      entryBinary: "restic_0.18.1_windows_amd64.exe",
       notes: "Preview catalog entry.",
     },
   ];
@@ -4540,7 +4572,11 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
           ? `${MOCK_APP_DATA_ROOT}/optional-tools/downloaded/mailpit/${targetPackage.version}/mailpit.exe`
           : targetPackage.toolType === "phpmyadmin"
             ? `${MOCK_APP_DATA_ROOT}/optional-tools/downloaded/phpmyadmin/${targetPackage.version}/phpMyAdmin-${targetPackage.version}-all-languages/index.php`
-            : `${MOCK_APP_DATA_ROOT}/optional-tools/downloaded/cloudflared/${targetPackage.version}/cloudflared.exe`;
+            : targetPackage.toolType === "redis"
+              ? `${MOCK_APP_DATA_ROOT}/optional-tools/downloaded/redis/${targetPackage.version}/Redis-${targetPackage.version}-Windows-x64-msys2/redis-server.exe`
+              : targetPackage.toolType === "restic"
+                ? `${MOCK_APP_DATA_ROOT}/optional-tools/downloaded/restic/${targetPackage.version}/restic_0.18.1_windows_amd64.exe`
+                : `${MOCK_APP_DATA_ROOT}/optional-tools/downloaded/cloudflared/${targetPackage.version}/cloudflared.exe`;
       const next = {
         id: `${targetPackage.toolType}-${targetPackage.version}`,
         toolType: targetPackage.toolType,

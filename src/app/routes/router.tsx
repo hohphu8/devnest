@@ -321,6 +321,10 @@ function optionalToolLabel(toolType: OptionalToolType): string {
       return "Cloudflared";
     case "phpmyadmin":
       return "phpMyAdmin";
+    case "redis":
+      return "Redis";
+    case "restic":
+      return "Restic";
   }
 }
 
@@ -332,6 +336,10 @@ function optionalToolFamilyLabel(toolType: OptionalToolType): string {
       return "Tunnel Client";
     case "phpmyadmin":
       return "Database UI";
+    case "redis":
+      return "Cache Service";
+    case "restic":
+      return "Dedup Backup";
   }
 }
 
@@ -358,19 +366,22 @@ function findOptionalToolUpdatePackage(
   tool: OptionalToolInventoryItem,
   packages: OptionalToolPackage[],
 ): OptionalToolPackage | null {
+  const installedVersion = normalizeCatalogVersion(tool.version);
   const candidates = packages.filter((toolPackage) => {
     if (toolPackage.toolType !== tool.toolType) {
       return false;
     }
 
-    return compareRuntimeVersions(toolPackage.version, tool.version) > 0;
+    return compareRuntimeVersions(normalizeCatalogVersion(toolPackage.version), installedVersion) > 0;
   });
 
   if (candidates.length === 0) {
     return null;
   }
 
-  return [...candidates].sort((left, right) => compareRuntimeVersions(right.version, left.version))[0];
+  return [...candidates].sort((left, right) =>
+    compareRuntimeVersions(normalizeCatalogVersion(right.version), normalizeCatalogVersion(left.version)),
+  )[0];
 }
 
 function compareRuntimeVersions(left: string, right: string): number {
@@ -387,6 +398,22 @@ function normalizeCatalogVersion(value: string): string {
     .replace(/[^0-9a-z._-]+$/i, "")
     .replace(/^v/i, "")
     .toLowerCase();
+}
+
+function displayCatalogVersion(value: string): string {
+  return value
+    .trim()
+    .replace(/^[^0-9a-z]+/i, "")
+    .replace(/[^0-9a-z._-]+$/i, "")
+    .replace(/^v/i, "");
+}
+
+function optionalToolHealthLabel(tool: OptionalToolInventoryItem): string {
+  if (tool.status === "missing") {
+    return "Missing";
+  }
+
+  return tool.isActive ? "Active install" : "Installed";
 }
 
 function findRuntimeUpdatePackage(
@@ -455,6 +482,14 @@ function serviceLabel(name: ServiceName): string {
     case "redis":
       return "Redis";
   }
+}
+
+function optionalToolTypeForService(name?: ServiceName | null): OptionalToolType | null {
+  if (name === "mailpit" || name === "redis") {
+    return name;
+  }
+
+  return null;
 }
 
 function phpExtensionLabel(extensionName: string): string {
@@ -1403,11 +1438,13 @@ function ServicesRoute() {
     stopService,
   } = useServiceStore();
   const [portCheck, setPortCheck] = useState<PortCheckResult>();
+  const [optionalToolInventory, setOptionalToolInventory] = useState<OptionalToolInventoryItem[]>([]);
   const [runtimeInventory, setRuntimeInventory] = useState<RuntimeInventoryItem[]>([]);
   const pushToast = useToastStore((state) => state.push);
 
   useEffect(() => {
     void refreshRuntimeInventory();
+    void refreshOptionalToolInventory();
   }, []);
 
   useEffect(() => {
@@ -1453,6 +1490,16 @@ function ServicesRoute() {
         : undefined,
     [activeService, runtimeInventory],
   );
+  const activeOptionalTool = useMemo(() => {
+    const toolType = optionalToolTypeForService(activeService?.name);
+    if (!toolType) {
+      return undefined;
+    }
+
+    return optionalToolInventory.find(
+      (tool) => tool.toolType === toolType && tool.isActive && tool.status === "available",
+    );
+  }, [activeService?.name, optionalToolInventory]);
 
   async function refreshRuntimeInventory() {
     try {
@@ -1462,9 +1509,18 @@ function ServicesRoute() {
     }
   }
 
+  async function refreshOptionalToolInventory() {
+    try {
+      setOptionalToolInventory(await optionalToolApi.list());
+    } catch {
+      setOptionalToolInventory([]);
+    }
+  }
+
   async function refreshSelectedService() {
     await loadServices();
     await refreshRuntimeInventory();
+    await refreshOptionalToolInventory();
     if (!selectedServiceName) {
       setPortCheck(undefined);
       return;
@@ -1657,6 +1713,7 @@ function ServicesRoute() {
 
         <ServiceInspector
           actionName={actionName}
+          activeOptionalTool={activeOptionalTool}
           activeRuntime={activeRuntime}
           onOpenDashboard={() =>
             activeService ? handleOpenServiceDashboard(activeService.name) : Promise.resolve()
@@ -2384,6 +2441,12 @@ function databaseSnapshotTriggerLabel(triggerSource: DatabaseSnapshotSummary["tr
     default:
       return "Manual";
   }
+}
+
+function databaseSnapshotBackendLabel(
+  storageBackend: DatabaseSnapshotSummary["storageBackend"] | undefined,
+): string {
+  return storageBackend === "restic" ? "Restic dedup" : "SQL";
 }
 
 function formatDatabaseScheduleLabel(status: DatabaseTimeMachineStatus): string {
@@ -3486,6 +3549,7 @@ function DatabasesRoute() {
                         <strong>{formatUpdatedAt(snapshot.createdAt)}</strong>
                         <span>
                           {databaseSnapshotTriggerLabel(snapshot.triggerSource)} •{" "}
+                          {databaseSnapshotBackendLabel(snapshot.storageBackend)} •{" "}
                           {formatDatabaseSnapshotSize(snapshot.sizeBytes)}
                         </span>
                         {snapshot.linkedProjectNames.length > 0 ? (
@@ -4898,8 +4962,8 @@ function SettingsRoute() {
       await optionalToolApi.reveal(tool.id);
       pushToast({
         tone: "info",
-        title: "Opened in Explorer",
-        message: `${optionalToolLabel(tool.toolType)} ${tool.version} path opened in Explorer.`,
+        title: "Folder opened",
+        message: `${optionalToolLabel(tool.toolType)} ${displayCatalogVersion(tool.version)} folder opened in Explorer.`,
       });
     } catch (invokeError) {
       pushToast({
@@ -4925,7 +4989,7 @@ function SettingsRoute() {
       pushToast({
         tone: "success",
         title: "Optional tool uninstalled",
-        message: `${optionalToolLabel(tool.toolType)} ${tool.version} was removed from DevNest.`,
+        message: `${optionalToolLabel(tool.toolType)} ${displayCatalogVersion(tool.version)} was removed from DevNest.`,
       });
     } catch (invokeError) {
       const details =
@@ -4947,7 +5011,13 @@ function SettingsRoute() {
   }
 
   const runtimeTypeOrder: RuntimeType[] = ["php", "apache", "nginx", "frankenphp", "mysql"];
-  const optionalToolTypeOrder: OptionalToolType[] = ["mailpit", "phpmyadmin", "cloudflared"];
+  const optionalToolTypeOrder: OptionalToolType[] = [
+    "mailpit",
+    "redis",
+    "phpmyadmin",
+    "restic",
+    "cloudflared",
+  ];
   const sortedRuntimes = useMemo(
     () =>
       [...runtimes].sort((left, right) => {
@@ -6368,7 +6438,7 @@ function SettingsRoute() {
                           </span>
                         </div>
                       </td>
-                      <td>{tool.version}</td>
+                      <td>{displayCatalogVersion(tool.version)}</td>
                       <td>
                         <div className="runtime-status-copy">
                           <span
@@ -6381,7 +6451,7 @@ function SettingsRoute() {
                                   : "warning"
                             }
                           >
-                            {tool.isActive ? "active" : tool.status}
+                            {optionalToolHealthLabel(tool)}
                           </span>
                           {tool.details ? <span className="helper-text">{tool.details}</span> : null}
                         </div>
@@ -6390,14 +6460,19 @@ function SettingsRoute() {
                         {updatePackage ? (
                           <div className="runtime-status-copy">
                             <span className="status-chip" data-tone="warning">
-                              Available
+                              Update
                             </span>
                             <span className="runtime-table-note">
-                              {updatePackage.displayName} is ready to install.
+                              {updatePackage.displayName} is available.
                             </span>
                           </div>
                         ) : (
-                          <span className="runtime-table-note">Current catalog is up to date.</span>
+                          <div className="runtime-status-copy">
+                            <span className="status-chip" data-tone="success">
+                              Current
+                            </span>
+                            <span className="runtime-table-note">Installed package is current.</span>
+                          </div>
                         )}
                       </td>
                       <td>{formatUpdatedAt(tool.updatedAt)}</td>
@@ -7311,7 +7386,7 @@ function SettingsRoute() {
             <div className="confirm-dialog-copy">
               <h3>Uninstall optional tool?</h3>
               <p>
-                This will remove <strong>{optionalToolLabel(pendingOptionalToolRemoval.toolType)} {pendingOptionalToolRemoval.version}</strong> from the DevNest optional tools inventory.
+                This will remove <strong>{optionalToolLabel(pendingOptionalToolRemoval.toolType)} {displayCatalogVersion(pendingOptionalToolRemoval.version)}</strong> from the DevNest optional tools inventory.
               </p>
               <div className="detail-item">
                 <span className="detail-label">Path</span>

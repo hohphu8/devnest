@@ -1,10 +1,12 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import type { OptionalToolInventoryItem } from "@/types/optional-tool";
 import type { RuntimeInventoryItem } from "@/types/runtime";
 import type { PortCheckResult, ServiceName, ServiceState } from "@/types/service";
 
 interface ServiceInspectorProps {
   actionName?: ServiceName;
+  activeOptionalTool?: OptionalToolInventoryItem;
   activeRuntime?: RuntimeInventoryItem;
   portCheck?: PortCheckResult;
   service?: ServiceState;
@@ -44,8 +46,28 @@ function getTone(status: ServiceState["status"]): "success" | "warning" | "error
   }
 }
 
+function serviceManagedOptionalToolLabel(name: ServiceName): string | null {
+  switch (name) {
+    case "mailpit":
+      return "Mailpit";
+    case "redis":
+      return "Redis";
+    default:
+      return null;
+  }
+}
+
+function displayCatalogVersion(value: string): string {
+  return value
+    .trim()
+    .replace(/^[^0-9a-z]+/i, "")
+    .replace(/[^0-9a-z._-]+$/i, "")
+    .replace(/^v/i, "");
+}
+
 export function ServiceInspector({
   actionName,
+  activeOptionalTool,
   activeRuntime,
   onOpenLogs,
   onRefresh,
@@ -71,6 +93,22 @@ export function ServiceInspector({
 
   const busy = actionName === service.name;
   const running = service.status === "running";
+  const managedOptionalToolLabel = serviceManagedOptionalToolLabel(service.name);
+  const activeSource = activeRuntime
+    ? `${activeRuntime.version} (${activeRuntime.status})`
+    : activeOptionalTool
+      ? `${managedOptionalToolLabel ?? serviceLabel(service.name)} ${displayCatalogVersion(
+          activeOptionalTool.version,
+        )} (${activeOptionalTool.status === "available" ? "installed" : "missing"})`
+      : managedOptionalToolLabel
+        ? "Managed optional tool not installed"
+        : "No active runtime linked";
+  const binaryPath =
+    activeRuntime?.path ??
+    activeOptionalTool?.path ??
+    (managedOptionalToolLabel
+      ? "Install the managed optional tool, or DevNest will use env/PATH fallback when available."
+      : "Open Settings to link an active runtime.");
 
   return (
     <Card>
@@ -103,12 +141,8 @@ export function ServiceInspector({
             <strong>{service.autoStart ? "Auto" : "Manual"}</strong>
           </div>
           <div className="detail-item">
-            <span className="detail-label">Active Runtime</span>
-            <strong>
-              {activeRuntime
-                ? `${activeRuntime.version} (${activeRuntime.status})`
-                : "No active runtime linked"}
-            </strong>
+            <span className="detail-label">Active Source</span>
+            <strong>{activeSource}</strong>
           </div>
           <div className="detail-item">
             <span className="detail-label">Port Guard</span>
@@ -123,10 +157,8 @@ export function ServiceInspector({
         </div>
 
         <div className="detail-item">
-          <span className="detail-label">Runtime Path</span>
-          <strong className="mono detail-value">
-            {activeRuntime?.path ?? "Open Settings to link an active runtime."}
-          </strong>
+          <span className="detail-label">Binary Path</span>
+          <strong className="mono detail-value">{binaryPath}</strong>
         </div>
         <div className="detail-item">
           <span className="detail-label">Last Error</span>
@@ -138,6 +170,15 @@ export function ServiceInspector({
             <strong>Shared data directory</strong>
             <span>
               DevNest currently mounts all managed MariaDB/MySQL versions onto one shared data directory. If you switch versions, especially to an older MariaDB build, startup can fail until the previous data state is shut down cleanly, backed up, or isolated.
+            </span>
+          </div>
+        ) : null}
+
+        {service.name === "redis" ? (
+          <div className="inline-note-card" data-tone="warning">
+            <strong>Redis auth compatibility</strong>
+            <span>
+              Managed Redis uses a local ACL bootstrap so no-password clients work, and clients that send AUTH for a local password do not fail the workspace.
             </span>
           </div>
         ) : null}

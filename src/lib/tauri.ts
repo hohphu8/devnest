@@ -7,6 +7,11 @@ import type {
 } from "@/types/database";
 import type { DiagnosticItem } from "@/types/diagnostics";
 import type {
+  ClearDownloadCacheResult,
+  DownloadCacheBucket,
+  DownloadCacheSummary,
+} from "@/types/download-cache";
+import type {
   OptionalToolInstallTask,
   OptionalToolInventoryItem,
   OptionalToolPackage,
@@ -122,6 +127,7 @@ const MOCK_SERVICE_LOGS_KEY = "devnest.mock.service-logs";
 const MOCK_DATABASES_KEY = "devnest.mock.databases";
 const MOCK_DATABASE_SNAPSHOTS_KEY = "devnest.mock.database-snapshots";
 const MOCK_DATABASE_TIME_MACHINE_KEY = "devnest.mock.database-time-machine";
+const MOCK_DOWNLOAD_CACHE_KEY = "devnest.mock.download-cache";
 const MOCK_REDIS_KEYS_KEY = "devnest.mock.redis-keys";
 const MOCK_PROJECT_ENV_VARS_KEY = "devnest.mock.project-env-vars";
 const MOCK_PROJECT_SCHEDULED_TASKS_KEY = "devnest.mock.project-scheduled-tasks";
@@ -223,6 +229,63 @@ function writeMockDatabases(databases: string[]) {
   }
 
   window.localStorage.setItem(MOCK_DATABASES_KEY, JSON.stringify(databases));
+}
+
+function defaultMockDownloadCacheBuckets(): DownloadCacheBucket[] {
+  return [
+    {
+      id: "runtime",
+      displayName: "Runtime downloads",
+      path: `${MOCK_APP_DATA_ROOT}/runtime-downloads`,
+      sizeBytes: 142 * 1024 * 1024,
+      fileCount: 1,
+    },
+    {
+      id: "optionalTool",
+      displayName: "Optional tool downloads",
+      path: `${MOCK_APP_DATA_ROOT}/tool-downloads`,
+      sizeBytes: 38 * 1024 * 1024,
+      fileCount: 2,
+    },
+    {
+      id: "phpExtension",
+      displayName: "PHP extension downloads",
+      path: `${MOCK_APP_DATA_ROOT}/php-extension-downloads`,
+      sizeBytes: 7 * 1024 * 1024,
+      fileCount: 3,
+    },
+  ];
+}
+
+function buildMockDownloadCacheSummary(buckets: DownloadCacheBucket[]): DownloadCacheSummary {
+  return {
+    totalSizeBytes: buckets.reduce((total, bucket) => total + bucket.sizeBytes, 0),
+    fileCount: buckets.reduce((total, bucket) => total + bucket.fileCount, 0),
+    buckets,
+  };
+}
+
+function readMockDownloadCacheSummary(): DownloadCacheSummary {
+  if (typeof window === "undefined") {
+    return buildMockDownloadCacheSummary(defaultMockDownloadCacheBuckets());
+  }
+
+  const stored = window.localStorage.getItem(MOCK_DOWNLOAD_CACHE_KEY);
+  if (stored) {
+    return JSON.parse(stored) as DownloadCacheSummary;
+  }
+
+  const summary = buildMockDownloadCacheSummary(defaultMockDownloadCacheBuckets());
+  writeMockDownloadCacheSummary(summary);
+  return summary;
+}
+
+function writeMockDownloadCacheSummary(summary: DownloadCacheSummary) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(MOCK_DOWNLOAD_CACHE_KEY, JSON.stringify(summary));
 }
 
 function readMockDatabaseSnapshots(): Record<string, DatabaseSnapshotSummary[]> {
@@ -3151,6 +3214,8 @@ function getMockResponse<T>(command: string): T {
         updateEndpoint: BROWSER_PREVIEW_UPDATE_ENDPOINT,
         updaterConfigured: true,
       } as T;
+    case "get_download_cache_summary":
+      return readMockDownloadCacheSummary() as T;
     case "list_projects":
       return readMockProjects() as T;
     case "get_all_service_status":
@@ -3192,6 +3257,22 @@ function getMockResponseWithArgs<T>(command: string, args?: Record<string, unkno
         status: "restartRequired",
         targetVersion: "0.1.1",
       } as T;
+    case "clear_download_cache": {
+      const previous = readMockDownloadCacheSummary();
+      const emptySummary = buildMockDownloadCacheSummary(
+        previous.buckets.map((bucket) => ({
+          ...bucket,
+          sizeBytes: 0,
+          fileCount: 0,
+        })),
+      );
+      writeMockDownloadCacheSummary(emptySummary);
+      return {
+        deletedBytes: previous.totalSizeBytes,
+        deletedFiles: previous.fileCount,
+        summary: emptySummary,
+      } satisfies ClearDownloadCacheResult as T;
+    }
     case "get_project": {
       const projectId = String(args?.projectId ?? "");
       return getMockProjectOrThrow(projectId) as T;

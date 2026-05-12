@@ -1681,6 +1681,62 @@ a {
   font-size: 12px;
 }
 
+.download-cache-card {
+  gap: 14px;
+}
+
+.download-cache-summary {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.32fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.download-cache-total,
+.download-cache-bucket {
+  border: 1px solid rgba(171, 195, 231, 0.08);
+  background: rgba(4, 11, 18, 0.42);
+}
+
+.download-cache-total {
+  display: grid;
+  gap: 6px;
+  align-content: center;
+  min-height: 104px;
+  padding: 14px;
+  border-radius: 14px;
+}
+
+.download-cache-total strong {
+  font-size: 22px;
+  font-weight: 620;
+}
+
+.download-cache-buckets {
+  display: grid;
+  gap: 8px;
+}
+
+.download-cache-bucket {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.download-cache-bucket > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.download-cache-bucket .runtime-table-note {
+  overflow-wrap: anywhere;
+}
+
 .redis-manager-card {
   gap: 16px;
 }

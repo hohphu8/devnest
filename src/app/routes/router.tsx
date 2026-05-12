@@ -34,6 +34,7 @@ import { appApi } from "@/lib/api/app-api";
 import { databaseApi } from "@/lib/api/database-api";
 import { configApi } from "@/lib/api/config-api";
 import { diagnosticsApi } from "@/lib/api/diagnostics-api";
+import { downloadCacheApi } from "@/lib/api/download-cache-api";
 import { optionalToolApi } from "@/lib/api/optional-tool-api";
 import { persistentTunnelApi } from "@/lib/api/persistent-tunnel-api";
 import { projectProfileApi } from "@/lib/api/project-profile-api";
@@ -55,6 +56,7 @@ import type {
   DatabaseTimeMachineStatus,
 } from "@/types/database";
 import type { DiagnosticItem } from "@/types/diagnostics";
+import type { DownloadCacheSummary } from "@/types/download-cache";
 import type {
   OptionalToolInstallStage,
   OptionalToolInstallTask,
@@ -2424,7 +2426,7 @@ function DiagnosticsRoute() {
   );
 }
 
-function formatDatabaseSnapshotSize(value: number): string {
+function formatFileSize(value: number): string {
   if (value < 1024) {
     return `${value} B`;
   }
@@ -2433,7 +2435,11 @@ function formatDatabaseSnapshotSize(value: number): string {
     return `${(value / 1024).toFixed(1)} KB`;
   }
 
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function databaseSnapshotTriggerLabel(triggerSource: DatabaseSnapshotSummary["triggerSource"]): string {
@@ -3554,7 +3560,7 @@ function DatabasesRoute() {
                         <span>
                           {databaseSnapshotTriggerLabel(snapshot.triggerSource)} •{" "}
                           {databaseSnapshotBackendLabel(snapshot.storageBackend)} •{" "}
-                          {formatDatabaseSnapshotSize(snapshot.sizeBytes)}
+                          {formatFileSize(snapshot.sizeBytes)}
                         </span>
                         {snapshot.linkedProjectNames.length > 0 ? (
                           <span>Projects: {snapshot.linkedProjectNames.join(", ")}</span>
@@ -3671,6 +3677,9 @@ function SettingsRoute() {
   const [runtimePackages, setRuntimePackages] = useState<RuntimePackage[]>([]);
   const [optionalTools, setOptionalTools] = useState<OptionalToolInventoryItem[]>([]);
   const [optionalToolPackages, setOptionalToolPackages] = useState<OptionalToolPackage[]>([]);
+  const [downloadCacheSummary, setDownloadCacheSummary] =
+    useState<DownloadCacheSummary | null>(null);
+  const [downloadCacheLoading, setDownloadCacheLoading] = useState(false);
   const [persistentTunnelSetup, setPersistentTunnelSetup] =
     useState<PersistentTunnelSetupStatus | null>(null);
   const [namedTunnels, setNamedTunnels] = useState<PersistentTunnelNamedTunnelSummary[]>([]);
@@ -3691,6 +3700,7 @@ function SettingsRoute() {
   const [packageError, setPackageError] = useState<string>();
   const [optionalToolError, setOptionalToolError] = useState<string>();
   const [optionalToolPackageError, setOptionalToolPackageError] = useState<string>();
+  const [downloadCacheError, setDownloadCacheError] = useState<string>();
   const [persistentTunnelError, setPersistentTunnelError] = useState<string>();
   const [updateError, setUpdateError] = useState<string>();
   const [phpExtensionsError, setPhpExtensionsError] = useState<string>();
@@ -3943,6 +3953,22 @@ function SettingsRoute() {
     }
   }
 
+  async function loadDownloadCacheSummary() {
+    setDownloadCacheLoading(true);
+    setDownloadCacheError(undefined);
+
+    try {
+      setDownloadCacheSummary(await downloadCacheApi.summary());
+    } catch (invokeError) {
+      setDownloadCacheSummary(null);
+      setDownloadCacheError(
+        getAppErrorMessage(invokeError, "Failed to inspect managed download cache."),
+      );
+    } finally {
+      setDownloadCacheLoading(false);
+    }
+  }
+
   async function loadPersistentTunnelSetup() {
     setPersistentTunnelSetupLoading(true);
     setNamedTunnelsLoading(true);
@@ -4111,6 +4137,7 @@ function SettingsRoute() {
         loadOptionalToolInventory(),
         loadOptionalToolPackages(),
         loadOptionalToolInstallTask(),
+        loadDownloadCacheSummary(),
       ]);
 
       setWorkspaceBootLoading(false);
@@ -4980,6 +5007,34 @@ function SettingsRoute() {
         tone: "error",
         title: "Optional tool install failed",
         message: details ? `${baseMessage} ${details}` : baseMessage,
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleClearDownloadCache() {
+    setActionLoading("download-cache-clear");
+    setDownloadCacheError(undefined);
+
+    try {
+      const result = await downloadCacheApi.clear();
+      setDownloadCacheSummary(result.summary);
+      pushToast({
+        tone: "success",
+        title: "Download cache cleared",
+        message: `Removed ${formatFileSize(result.deletedBytes)} across ${result.deletedFiles} cached file${result.deletedFiles === 1 ? "" : "s"}.`,
+      });
+    } catch (invokeError) {
+      const message = getAppErrorMessage(
+        invokeError,
+        "Failed to clear the managed download cache.",
+      );
+      setDownloadCacheError(message);
+      pushToast({
+        tone: "error",
+        title: "Download cache cleanup failed",
+        message,
       });
     } finally {
       setActionLoading(null);
@@ -5894,6 +5949,7 @@ function SettingsRoute() {
             void loadRuntimePackages();
             void loadOptionalToolInventory();
             void loadOptionalToolPackages();
+            void loadDownloadCacheSummary();
             if (activeTab === "tunnel" || persistentTunnelLoaded) {
               void loadPersistentTunnelSetup();
             }
@@ -5910,6 +5966,7 @@ function SettingsRoute() {
       {packageError ? <span className="error-text">{packageError}</span> : null}
       {optionalToolError ? <span className="error-text">{optionalToolError}</span> : null}
       {optionalToolPackageError ? <span className="error-text">{optionalToolPackageError}</span> : null}
+      {downloadCacheError ? <span className="error-text">{downloadCacheError}</span> : null}
       {persistentTunnelError ? <span className="error-text">{persistentTunnelError}</span> : null}
       {updateError && appUpdateState !== "failed" ? <span className="error-text">{updateError}</span> : null}
 
@@ -6443,7 +6500,74 @@ function SettingsRoute() {
           id="workspace-panel-tools"
           role="tabpanel"
         >
-      <Card>
+          <Card className="download-cache-card">
+            <div className="page-header">
+              <div>
+                <h2>Download Cache</h2>
+                <p>
+                  Cached package archives are temporary; installed runtimes and tools stay in
+                  their managed folders.
+                </p>
+              </div>
+              <div className="runtime-table-actions">
+                <Button
+                  disabled={downloadCacheLoading || actionLoading !== null}
+                  onClick={() => void loadDownloadCacheSummary()}
+                >
+                  {downloadCacheLoading ? "Refreshing..." : "Refresh"}
+                </Button>
+                <Button
+                  className="button-danger"
+                  disabled={
+                    downloadCacheLoading ||
+                    actionLoading !== null ||
+                    !downloadCacheSummary ||
+                    downloadCacheSummary.fileCount === 0
+                  }
+                  onClick={() => void handleClearDownloadCache()}
+                >
+                  {actionLoading === "download-cache-clear" ? "Clearing..." : "Clear Cache"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="download-cache-summary">
+              <div className="download-cache-total">
+                <span className="runtime-table-note">Cached archives</span>
+                <strong>
+                  {downloadCacheSummary
+                    ? formatFileSize(downloadCacheSummary.totalSizeBytes)
+                    : downloadCacheLoading
+                      ? "Scanning..."
+                      : "Unknown"}
+                </strong>
+                <span className="helper-text">
+                  {downloadCacheSummary
+                    ? `${downloadCacheSummary.fileCount} file${downloadCacheSummary.fileCount === 1 ? "" : "s"} across managed download folders.`
+                    : "DevNest has not inspected the download folders yet."}
+                </span>
+              </div>
+              <div className="download-cache-buckets">
+                {(downloadCacheSummary?.buckets ?? []).map((bucket) => (
+                  <div className="download-cache-bucket" key={bucket.id}>
+                    <div>
+                      <strong>{bucket.displayName}</strong>
+                      <span className="mono runtime-table-note">{bucket.path}</span>
+                    </div>
+                    <span
+                      className="status-chip"
+                      data-tone={bucket.fileCount > 0 ? "warning" : "success"}
+                    >
+                      {formatFileSize(bucket.sizeBytes)} / {bucket.fileCount} file
+                      {bucket.fileCount === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Card>
+
+          <Card>
         <div className="page-header">
           <div>
             <h2>Installed Optional Tools</h2>

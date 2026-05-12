@@ -338,14 +338,39 @@ fn cleanup_mobile_preview_sessions(state: &AppState) {
     }
 }
 
-fn request_full_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    let state = app.state::<AppState>();
-    cleanup_mobile_preview_sessions(&state);
+fn stop_managed_services_for_exit(state: &AppState) {
+    let connection = match Connection::open(&state.db_path) {
+        Ok(connection) => connection,
+        Err(error) => {
+            eprintln!(
+                "DevNest exit could not open the database to stop managed services: {}",
+                error
+            );
+            return;
+        }
+    };
+
+    if let Err(error) = tray::stop_all_services_for_exit(&connection, state) {
+        eprintln!(
+            "DevNest exit finished with one or more managed service stop failures: {}",
+            error
+        );
+    }
+}
+
+fn cleanup_for_full_exit(state: &AppState) {
+    stop_managed_services_for_exit(state);
+    cleanup_mobile_preview_sessions(state);
     state
         .scheduled_task_scheduler_shutdown
         .store(true, Ordering::Relaxed);
-    scheduled_task_manager::stop_all_project_scheduled_tasks(&state);
-    worker_manager::stop_all_project_workers(&state);
+    scheduled_task_manager::stop_all_project_scheduled_tasks(state);
+    worker_manager::stop_all_project_workers(state);
+}
+
+fn request_full_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let state = app.state::<AppState>();
+    cleanup_for_full_exit(&state);
     if let Ok(mut allow_exit) = state.allow_exit.lock() {
         *allow_exit = true;
     }
@@ -579,12 +604,7 @@ pub fn run() {
     app.run(|app_handle, event| match event {
         RunEvent::ExitRequested { .. } => {
             let state = app_handle.state::<AppState>();
-            cleanup_mobile_preview_sessions(&state);
-            state
-                .scheduled_task_scheduler_shutdown
-                .store(true, Ordering::Relaxed);
-            scheduled_task_manager::stop_all_project_scheduled_tasks(&state);
-            worker_manager::stop_all_project_workers(&state);
+            cleanup_for_full_exit(&state);
         }
         RunEvent::WindowEvent { label, event, .. } => {
             if label != MAIN_WINDOW_LABEL {

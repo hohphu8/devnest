@@ -82,6 +82,17 @@ fn service_start_rank(name: &ServiceName) -> usize {
     }
 }
 
+fn service_stop_rank(name: &ServiceName) -> usize {
+    match name {
+        ServiceName::Apache => 0,
+        ServiceName::Nginx => 1,
+        ServiceName::Frankenphp => 2,
+        ServiceName::Mailpit => 3,
+        ServiceName::Redis => 4,
+        ServiceName::Mysql => 5,
+    }
+}
+
 fn tray_service_rank(name: &ServiceName) -> Option<usize> {
     match name {
         ServiceName::Apache => Some(0),
@@ -148,14 +159,53 @@ fn stop_all_services<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     let state = app.state::<AppState>();
     let connection = connection_from_state(&state)?;
 
-    for service in ServiceRepository::list(&connection)?
+    stop_all_running_services(&connection, &state, false)
+}
+
+pub(crate) fn stop_all_services_for_exit(
+    connection: &Connection,
+    state: &AppState,
+) -> Result<(), AppError> {
+    stop_all_running_services(connection, state, true)
+}
+
+fn stop_all_running_services(
+    connection: &Connection,
+    state: &AppState,
+    continue_on_error: bool,
+) -> Result<(), AppError> {
+    let mut first_error = None;
+    let mut services = service_manager::get_all_service_status(connection, state)?
         .into_iter()
         .filter(|service| matches!(service.status, ServiceStatus::Running))
-    {
-        stop_service_with_tray_cleanup(&connection, &state, service.name)?;
+        .collect::<Vec<_>>();
+
+    services.sort_by_key(|service| service_stop_rank(&service.name));
+
+    for service in services {
+        if let Err(error) = stop_service_with_tray_cleanup(connection, state, service.name.clone())
+        {
+            if continue_on_error {
+                eprintln!(
+                    "DevNest exit could not stop {}: {}",
+                    service.name.display_name(),
+                    error
+                );
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+                continue;
+            }
+
+            return Err(error);
+        }
     }
 
-    Ok(())
+    if let Some(error) = first_error {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
 
 fn stop_service_with_tray_cleanup(
@@ -527,6 +577,31 @@ mod tests {
                 ServiceName::Mysql,
                 ServiceName::Mailpit,
                 ServiceName::Redis,
+            ]
+        );
+    }
+
+    #[test]
+    fn services_have_exit_stop_order() {
+        let mut services = [
+            ServiceName::Redis,
+            ServiceName::Mysql,
+            ServiceName::Nginx,
+            ServiceName::Apache,
+            ServiceName::Mailpit,
+            ServiceName::Frankenphp,
+        ];
+        services.sort_by_key(service_stop_rank);
+
+        assert_eq!(
+            services,
+            [
+                ServiceName::Apache,
+                ServiceName::Nginx,
+                ServiceName::Frankenphp,
+                ServiceName::Mailpit,
+                ServiceName::Redis,
+                ServiceName::Mysql,
             ]
         );
     }

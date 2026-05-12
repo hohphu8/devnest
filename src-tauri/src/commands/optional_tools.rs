@@ -1,4 +1,5 @@
 use crate::core::config_generator;
+use crate::core::download_cache;
 use crate::core::hosts_editor;
 use crate::core::optional_tools;
 use crate::core::service_manager;
@@ -493,6 +494,7 @@ pub async fn install_optional_tool_package(
             package_for_install.display_name,
             extracted_root.to_string_lossy()
         ));
+        download_cache::remove_archive_best_effort(&archive_path);
         Ok::<OptionalToolInventoryItem, AppError>(inventory_item)
     })
     .await

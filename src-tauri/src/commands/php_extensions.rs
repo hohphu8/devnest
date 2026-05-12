@@ -1,3 +1,4 @@
+use crate::core::download_cache;
 use crate::core::php_extension_packages;
 use crate::core::runtime_registry;
 use crate::error::AppError;
@@ -453,6 +454,7 @@ pub async fn install_php_extension_package(
             &archive_path,
             &context.ext_dir,
         )?;
+        download_cache::remove_archive_best_effort(&archive_path);
 
         Ok::<PhpExtensionInstallResult, AppError>(PhpExtensionInstallResult {
             runtime_id: runtime.id,

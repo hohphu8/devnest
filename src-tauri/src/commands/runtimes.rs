@@ -1,3 +1,4 @@
+use crate::core::download_cache;
 use crate::core::php_cli_environment;
 use crate::core::runtime_packages;
 use crate::core::runtime_registry;
@@ -737,6 +738,7 @@ pub async fn install_runtime_package(
             package_for_install.display_name,
             extracted_root.to_string_lossy()
         ));
+        download_cache::remove_archive_best_effort(&archive_path);
 
         Ok::<RuntimeInventoryItem, AppError>(apply_sync_warning(inventory_item, sync_warning))
     })

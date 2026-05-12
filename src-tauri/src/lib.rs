@@ -18,6 +18,7 @@ use crate::commands::database::{
     run_scheduled_database_snapshot_cycle, take_database_snapshot,
 };
 use crate::commands::diagnostics::{apply_diagnostic_fix, run_diagnostics};
+use crate::commands::download_cache::{clear_download_cache, get_download_cache_summary};
 use crate::commands::frankenphp_octane::{
     get_project_frankenphp_octane_preflight, get_project_frankenphp_worker_health,
     get_project_frankenphp_worker_preflight, get_project_frankenphp_worker_settings,
@@ -437,6 +438,8 @@ pub fn run() {
             get_app_release_info,
             check_for_app_update,
             install_app_update,
+            get_download_cache_summary,
+            clear_download_cache,
             list_projects,
             get_project,
             pick_project_folder,

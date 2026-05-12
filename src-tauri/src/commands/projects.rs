@@ -1,6 +1,7 @@
 use crate::commands::{database, persistent_tunnels};
 use crate::core::frankenphp_octane_manager;
 use crate::core::scheduled_task_manager;
+use crate::core::service_manager;
 use crate::core::worker_manager;
 use crate::core::{config_generator, project_scanner};
 use crate::error::AppError;
@@ -10,7 +11,7 @@ use crate::models::project::{
 use crate::models::scan::ScanResult;
 use crate::state::AppState;
 use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
-use crate::storage::repositories::ProjectRepository;
+use crate::storage::repositories::{ProjectPhpFastcgiBackendRepository, ProjectRepository};
 use crate::utils::windows::{open_folder_in_explorer, open_in_vscode, open_terminal_at_path};
 use rfd::FileDialog;
 use rusqlite::Connection;
@@ -116,6 +117,14 @@ pub fn update_project(
     }
 
     let updated = ProjectRepository::update(&connection, &project_id, patch)?;
+    if current.php_version != updated.php_version
+        || current.server_type.as_str() != updated.server_type.as_str()
+    {
+        let _ = service_manager::stop_project_php_fastcgi_process(&state, &project_id);
+    }
+    if !matches!(updated.server_type, ServerType::Apache | ServerType::Nginx) {
+        let _ = ProjectPhpFastcgiBackendRepository::delete(&connection, &project_id);
+    }
     if !matches!(current.frankenphp_mode, FrankenphpMode::Classic)
         && current.frankenphp_mode.as_str() != updated.frankenphp_mode.as_str()
     {
@@ -139,10 +148,24 @@ pub fn update_project(
     } else {
         None
     };
-    config_generator::generate_config_with_aliases_and_frankenphp_worker_port(
+    let php_fastcgi_port = if matches!(updated.server_type, ServerType::Apache | ServerType::Nginx)
+    {
+        Some(
+            ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+                &connection,
+                &state.workspace_dir,
+                &updated,
+            )?
+            .port as u16,
+        )
+    } else {
+        None
+    };
+    config_generator::generate_config_with_aliases_and_ports(
         &updated,
         &state.workspace_dir,
         &[],
+        php_fastcgi_port,
         worker_port,
     )?;
     if persistent_route_context_changed {
@@ -177,7 +200,9 @@ pub fn delete_project(
     }
     worker_manager::delete_workers_for_project(&connection, &state, &project_id)?;
     let _ = frankenphp_octane_manager::stop(&connection, &state, &project_id);
+    let _ = service_manager::stop_project_php_fastcgi_process(&state, &project_id);
     scheduled_task_manager::delete_tasks_for_project(&connection, &state, &project_id)?;
+    let _ = ProjectPhpFastcgiBackendRepository::delete(&connection, &project_id);
     ProjectRepository::delete(&connection, &project_id)?;
     remove_project_managed_configs(&state.workspace_dir, &project.domain)?;
 

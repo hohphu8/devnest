@@ -5,8 +5,8 @@ use crate::models::persistent_tunnel::{
     PersistentTunnelManagedSetup, PersistentTunnelProvider, ProjectPersistentHostname,
 };
 use crate::models::project::{
-    CreateProjectInput, FrameworkType, FrankenphpMode, Project, ProjectStatus, ServerType,
-    UpdateProjectPatch,
+    CreateProjectInput, FrameworkType, FrankenphpMode, Project, ProjectPhpFastcgiBackend,
+    ProjectStatus, ServerType, UpdateProjectPatch,
 };
 use crate::models::project_env_var::{
     CreateProjectEnvVarInput, ProjectEnvVar, UpdateProjectEnvVarInput,
@@ -123,6 +123,19 @@ fn map_project_row(row: &Row<'_>) -> Result<Project, AppError> {
             &row.get::<_, Option<String>>("frankenphp_mode")?
                 .unwrap_or_else(|| "classic".to_string()),
         )?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn map_project_php_fastcgi_backend_row(
+    row: &Row<'_>,
+) -> Result<ProjectPhpFastcgiBackend, AppError> {
+    Ok(ProjectPhpFastcgiBackend {
+        project_id: row.get("project_id")?,
+        php_version: row.get("php_version")?,
+        port: row.get("port")?,
+        log_path: row.get("log_path")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -688,6 +701,130 @@ impl ProjectRepository {
         }
 
         Ok(true)
+    }
+}
+
+pub struct ProjectPhpFastcgiBackendRepository;
+
+impl ProjectPhpFastcgiBackendRepository {
+    pub const MIN_PORT: i64 = 9200;
+    pub const MAX_PORT: i64 = 9499;
+
+    pub fn log_path_for_project(workspace_dir: &Path, project_id: &str) -> String {
+        workspace_dir
+            .join("runtime-logs")
+            .join(format!("php-project-{project_id}.log"))
+            .to_string_lossy()
+            .to_string()
+    }
+
+    pub fn get(
+        connection: &Connection,
+        project_id: &str,
+    ) -> Result<Option<ProjectPhpFastcgiBackend>, AppError> {
+        let mut statement = connection.prepare(
+            "
+            SELECT project_id, php_version, port, log_path, created_at, updated_at
+            FROM project_php_fastcgi_backends
+            WHERE project_id = ?1
+            ",
+        )?;
+
+        let backend = statement
+            .query_row([project_id], |row| {
+                map_project_php_fastcgi_backend_row(row)
+                    .map_err(|_| rusqlite::Error::ExecuteReturnedResults)
+            })
+            .optional()?;
+
+        Ok(backend)
+    }
+
+    fn allocate_port(connection: &Connection) -> Result<i64, AppError> {
+        let mut statement = connection.prepare(
+            "
+            SELECT port
+            FROM project_php_fastcgi_backends
+            ORDER BY port ASC
+            ",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, i64>(0))?;
+        let mut used_ports = Vec::new();
+        for row in rows {
+            used_ports.push(row?);
+        }
+
+        (Self::MIN_PORT..=Self::MAX_PORT)
+            .find(|port| !used_ports.contains(port))
+            .ok_or_else(|| {
+                AppError::new_validation(
+                    "PHP_FASTCGI_PORTS_EXHAUSTED",
+                    "DevNest could not allocate a project PHP FastCGI port. Free a project backend or widen the managed port range.",
+                )
+            })
+    }
+
+    pub fn get_or_create_for_project(
+        connection: &Connection,
+        workspace_dir: &Path,
+        project: &Project,
+    ) -> Result<ProjectPhpFastcgiBackend, AppError> {
+        if !matches!(project.server_type, ServerType::Apache | ServerType::Nginx) {
+            let _ = Self::delete(connection, &project.id)?;
+            return Err(AppError::new_validation(
+                "PHP_FASTCGI_BACKEND_NOT_REQUIRED",
+                "Project PHP FastCGI backends are only used by Apache and Nginx projects.",
+            ));
+        }
+
+        let log_path = Self::log_path_for_project(workspace_dir, &project.id);
+        let timestamp = now_iso()?;
+
+        if let Some(existing) = Self::get(connection, &project.id)? {
+            if existing.php_version != project.php_version || existing.log_path != log_path {
+                connection.execute(
+                    "
+                    UPDATE project_php_fastcgi_backends
+                    SET php_version = ?2, log_path = ?3, updated_at = ?4
+                    WHERE project_id = ?1
+                    ",
+                    params![&project.id, &project.php_version, log_path, timestamp],
+                )?;
+                return Self::get(connection, &project.id)?.ok_or_else(|| {
+                    AppError::new_validation(
+                        "PHP_FASTCGI_BACKEND_NOT_FOUND",
+                        "DevNest could not load the updated project PHP FastCGI backend.",
+                    )
+                });
+            }
+
+            return Ok(existing);
+        }
+
+        let port = Self::allocate_port(connection)?;
+        connection.execute(
+            "
+            INSERT INTO project_php_fastcgi_backends (
+                project_id, php_version, port, log_path, created_at, updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            ",
+            params![&project.id, &project.php_version, port, log_path, timestamp],
+        )?;
+
+        Self::get(connection, &project.id)?.ok_or_else(|| {
+            AppError::new_validation(
+                "PHP_FASTCGI_BACKEND_NOT_FOUND",
+                "DevNest could not load the project PHP FastCGI backend.",
+            )
+        })
+    }
+
+    pub fn delete(connection: &Connection, project_id: &str) -> Result<bool, AppError> {
+        Ok(connection.execute(
+            "DELETE FROM project_php_fastcgi_backends WHERE project_id = ?1",
+            [project_id],
+        )? > 0)
     }
 }
 
@@ -1934,8 +2071,9 @@ mod tests {
     use super::{
         OptionalToolVersionRepository, PersistentTunnelSetupRepository,
         PhpExtensionOverrideRepository, ProjectEnvVarRepository,
-        ProjectPersistentHostnameRepository, ProjectRepository, RuntimeConfigOverrideRepository,
-        RuntimeSuppressionRepository, RuntimeVersionRepository, ServiceRepository,
+        ProjectPersistentHostnameRepository, ProjectPhpFastcgiBackendRepository, ProjectRepository,
+        RuntimeConfigOverrideRepository, RuntimeSuppressionRepository, RuntimeVersionRepository,
+        ServiceRepository,
     };
     use crate::models::optional_tool::OptionalToolType;
     use crate::models::persistent_tunnel::PersistentTunnelProvider;
@@ -1991,7 +2129,7 @@ mod tests {
     fn seeds_default_services() {
         let (db_path, connection) = setup_test_db();
         let services = ServiceRepository::list(&connection).expect("service list should load");
-        assert_eq!(services.len(), 5);
+        assert_eq!(services.len(), 6);
         fs::remove_file(db_path).ok();
     }
 
@@ -2226,6 +2364,100 @@ mod tests {
             .expect("project delete should succeed");
         assert!(deleted);
         cleanup_paths(db_path, &[&project_root]);
+    }
+
+    #[test]
+    fn allocates_distinct_php_fastcgi_backends_for_same_php_version_projects() {
+        let (db_path, connection) = setup_test_db();
+        let workspace_dir =
+            std::env::temp_dir().join(format!("devnest-fastcgi-workspace-{}", Uuid::new_v4()));
+        let first_root = make_temp_project_root();
+        let second_root = make_temp_project_root();
+        let first = ProjectRepository::create(&connection, sample_project_input(&first_root))
+            .expect("first project should create");
+        let second = ProjectRepository::create(
+            &connection,
+            CreateProjectInput {
+                path: second_root.to_string_lossy().to_string(),
+                domain: "shop-api-2.test".to_string(),
+                ..sample_project_input(&second_root)
+            },
+        )
+        .expect("second project should create");
+
+        let first_backend = ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+            &connection,
+            &workspace_dir,
+            &first,
+        )
+        .expect("first backend should allocate");
+        let second_backend = ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+            &connection,
+            &workspace_dir,
+            &second,
+        )
+        .expect("second backend should allocate");
+
+        assert_eq!(first_backend.php_version, "8.2");
+        assert_eq!(second_backend.php_version, "8.2");
+        assert_eq!(
+            first_backend.port,
+            ProjectPhpFastcgiBackendRepository::MIN_PORT
+        );
+        assert_eq!(
+            second_backend.port,
+            ProjectPhpFastcgiBackendRepository::MIN_PORT + 1
+        );
+        assert_ne!(first_backend.port, second_backend.port);
+
+        cleanup_paths(db_path, &[&first_root, &second_root]);
+        fs::remove_dir_all(workspace_dir).ok();
+    }
+
+    #[test]
+    fn updates_php_fastcgi_backend_version_without_reallocating_port() {
+        let (db_path, connection) = setup_test_db();
+        let workspace_dir =
+            std::env::temp_dir().join(format!("devnest-fastcgi-workspace-{}", Uuid::new_v4()));
+        let project_root = make_temp_project_root();
+        let project = ProjectRepository::create(&connection, sample_project_input(&project_root))
+            .expect("project should create");
+        let initial = ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+            &connection,
+            &workspace_dir,
+            &project,
+        )
+        .expect("backend should allocate");
+        let updated = ProjectRepository::update(
+            &connection,
+            &project.id,
+            UpdateProjectPatch {
+                name: None,
+                domain: None,
+                server_type: None,
+                php_version: Some("8.4".to_string()),
+                framework: None,
+                document_root: None,
+                ssl_enabled: None,
+                database_name: None,
+                database_port: None,
+                status: None,
+                frankenphp_mode: None,
+            },
+        )
+        .expect("project should update");
+        let backend = ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+            &connection,
+            &workspace_dir,
+            &updated,
+        )
+        .expect("backend should update");
+
+        assert_eq!(backend.port, initial.port);
+        assert_eq!(backend.php_version, "8.4");
+
+        cleanup_paths(db_path, &[&project_root]);
+        fs::remove_dir_all(workspace_dir).ok();
     }
 
     #[test]

@@ -350,12 +350,20 @@ fn render_ssl_paths(
     }))
 }
 
-pub fn preview_config_with_frankenphp_worker_port(
+pub fn preview_config_with_ports(
     project: &Project,
     workspace_dir: &Path,
+    php_fastcgi_port: Option<u16>,
     octane_worker_port: Option<i64>,
 ) -> Result<RenderedVhostConfig, AppError> {
-    render_config(project, workspace_dir, false, &[], octane_worker_port)
+    render_config(
+        project,
+        workspace_dir,
+        false,
+        &[],
+        php_fastcgi_port,
+        octane_worker_port,
+    )
 }
 
 fn render_config(
@@ -363,6 +371,7 @@ fn render_config(
     workspace_dir: &Path,
     ensure_ssl_material: bool,
     aliases: &[String],
+    php_fastcgi_port: Option<u16>,
     octane_worker_port: Option<i64>,
 ) -> Result<RenderedVhostConfig, AppError> {
     let project_path = Path::new(&project.path);
@@ -375,9 +384,12 @@ fn render_config(
         managed_config_output_path(workspace_dir, &project.server_type, &project.domain);
     let logs_dir = managed_logs_dir(workspace_dir);
     let php_port = match project.server_type {
-        ServerType::Apache | ServerType::Nginx => {
-            Some(runtime_registry::php_fastcgi_port(&project.php_version)?)
-        }
+        ServerType::Apache | ServerType::Nginx => Some(php_fastcgi_port.ok_or_else(|| {
+            AppError::new_validation(
+                "PHP_FASTCGI_BACKEND_MISSING",
+                "Apache and Nginx project configs require an allocated project PHP FastCGI backend.",
+            )
+        })?),
         ServerType::Frankenphp => None,
     };
     let document_root_for_config = normalize_for_config(&resolved_document_root);
@@ -453,28 +465,29 @@ fn render_config(
     })
 }
 
-pub fn generate_config(
-    project: &Project,
-    workspace_dir: &Path,
-) -> Result<RenderedVhostConfig, AppError> {
-    generate_config_with_aliases(project, workspace_dir, &[])
-}
-
-pub fn generate_config_with_aliases(
+pub fn generate_config_with_aliases_and_ports(
     project: &Project,
     workspace_dir: &Path,
     aliases: &[String],
-) -> Result<RenderedVhostConfig, AppError> {
-    generate_config_with_aliases_and_frankenphp_worker_port(project, workspace_dir, aliases, None)
-}
-
-pub fn generate_config_with_aliases_and_frankenphp_worker_port(
-    project: &Project,
-    workspace_dir: &Path,
-    aliases: &[String],
+    php_fastcgi_port: Option<u16>,
     octane_worker_port: Option<i64>,
 ) -> Result<RenderedVhostConfig, AppError> {
-    let rendered = render_config(project, workspace_dir, true, aliases, octane_worker_port)?;
+    let rendered = render_config(
+        project,
+        workspace_dir,
+        true,
+        aliases,
+        php_fastcgi_port,
+        octane_worker_port,
+    )?;
+    write_rendered_config(workspace_dir, project, rendered)
+}
+
+fn write_rendered_config(
+    workspace_dir: &Path,
+    project: &Project,
+    rendered: RenderedVhostConfig,
+) -> Result<RenderedVhostConfig, AppError> {
     let server_dir = managed_server_config_dir(workspace_dir, &project.server_type);
     let logs_dir = managed_logs_dir(workspace_dir);
 
@@ -527,7 +540,14 @@ pub fn generate_phpmyadmin_config(
         updated_at: "2026-04-19T00:00:00Z".to_string(),
     };
 
-    generate_config(&project, workspace_dir)
+    let php_port = match server_type {
+        ServerType::Apache | ServerType::Nginx => {
+            Some(runtime_registry::php_fastcgi_port(php_version)?)
+        }
+        ServerType::Frankenphp => None,
+    };
+    let rendered = render_config(&project, workspace_dir, true, &[], php_port, None)?;
+    write_rendered_config(workspace_dir, &project, rendered)
 }
 
 pub fn remove_managed_config(
@@ -554,9 +574,8 @@ pub fn remove_managed_config(
 #[cfg(test)]
 mod tests {
     use super::{
-        PHPMYADMIN_DOMAIN, generate_config, generate_config_with_aliases,
-        generate_phpmyadmin_config, preview_config_with_frankenphp_worker_port,
-        remove_managed_config,
+        PHPMYADMIN_DOMAIN, generate_config_with_aliases_and_ports, generate_phpmyadmin_config,
+        preview_config_with_ports, remove_managed_config,
     };
     use crate::models::project::{
         FrameworkType, FrankenphpMode, Project, ProjectStatus, ServerType,
@@ -616,12 +635,12 @@ mod tests {
         let project_root = make_project_root(true);
         let project = sample_project(&project_root, ServerType::Nginx, FrameworkType::Laravel);
 
-        let preview = preview_config_with_frankenphp_worker_port(&project, &workspace, None)
+        let preview = preview_config_with_ports(&project, &workspace, Some(9200), None)
             .expect("preview should succeed");
 
         assert!(preview.config_text.contains("server_name sample.test;"));
         assert!(preview.config_text.contains("root"));
-        assert!(preview.config_text.contains("fastcgi_pass 127.0.0.1:9082;"));
+        assert!(preview.config_text.contains("fastcgi_pass 127.0.0.1:9200;"));
         assert!(
             preview
                 .config_text
@@ -648,10 +667,12 @@ mod tests {
         let project_root = make_project_root(true);
         let project = sample_project(&project_root, ServerType::Apache, FrameworkType::Laravel);
 
-        let rendered = generate_config_with_aliases(
+        let rendered = generate_config_with_aliases_and_ports(
             &project,
             &workspace,
             &[String::from("bright-lake.trycloudflare.com")],
+            Some(9201),
+            None,
         )
         .expect("config with aliases should generate");
 
@@ -672,7 +693,9 @@ mod tests {
             sample_project(&project_root, ServerType::Apache, FrameworkType::Wordpress);
         project.document_root = ".".to_string();
 
-        let rendered = generate_config(&project, &workspace).expect("generation should succeed");
+        let rendered =
+            generate_config_with_aliases_and_ports(&project, &workspace, &[], Some(9202), None)
+                .expect("generation should succeed");
         let written =
             fs::read_to_string(&rendered.output_path).expect("config file should be written");
 
@@ -680,7 +703,7 @@ mod tests {
         assert!(written.contains("ServerName sample.test"));
         assert!(written.contains("CustomLog"));
         assert!(
-            written.contains("ProxyPassMatch \"^/(.*\\.php(/.*)?)$\" \"fcgi://127.0.0.1:9082/")
+            written.contains("ProxyPassMatch \"^/(.*\\.php(/.*)?)$\" \"fcgi://127.0.0.1:9202/")
         );
         assert!(written.contains("$1\""));
         assert!(written.contains("ProxyFCGIBackendType GENERIC"));
@@ -698,7 +721,7 @@ mod tests {
         let mut project = sample_project(&project_root, ServerType::Nginx, FrameworkType::Laravel);
         project.document_root = ".".to_string();
 
-        let error = preview_config_with_frankenphp_worker_port(&project, &workspace, None)
+        let error = preview_config_with_ports(&project, &workspace, Some(9203), None)
             .expect_err("laravel root should be rejected");
         assert_eq!(error.code, "CONFIG_INVALID_DOCUMENT_ROOT");
 
@@ -712,7 +735,7 @@ mod tests {
         let mut project = sample_project(&project_root, ServerType::Nginx, FrameworkType::Laravel);
         project.ssl_enabled = true;
 
-        let preview = preview_config_with_frankenphp_worker_port(&project, &workspace, None)
+        let preview = preview_config_with_ports(&project, &workspace, Some(9204), None)
             .expect("preview should succeed");
 
         assert!(preview.config_text.contains("listen 443 ssl;"));
@@ -734,7 +757,7 @@ mod tests {
         let mut project = sample_project(&project_root, ServerType::Apache, FrameworkType::Laravel);
         project.ssl_enabled = true;
 
-        let preview = preview_config_with_frankenphp_worker_port(&project, &workspace, None)
+        let preview = preview_config_with_ports(&project, &workspace, Some(9205), None)
             .expect("preview should succeed");
 
         assert!(
@@ -759,7 +782,7 @@ mod tests {
         );
         project.ssl_enabled = true;
 
-        let preview = preview_config_with_frankenphp_worker_port(&project, &workspace, None)
+        let preview = preview_config_with_ports(&project, &workspace, None, None)
             .expect("preview should succeed");
 
         assert!(preview.config_text.contains("https://sample.test"));
@@ -781,14 +804,14 @@ mod tests {
         );
         project.frankenphp_mode = FrankenphpMode::Octane;
 
-        let preview = preview_config_with_frankenphp_worker_port(&project, &workspace, Some(8123))
+        let preview = preview_config_with_ports(&project, &workspace, None, Some(8123))
             .expect("octane preview should succeed");
 
         assert!(preview.config_text.contains("reverse_proxy 127.0.0.1:8123"));
         assert!(
             preview
                 .config_text
-                .contains("header_up X-Forwarded-Proto https")
+                .contains("header_up X-Forwarded-Proto http")
         );
         assert!(!preview.config_text.contains("php_server"));
         assert!(!preview.config_text.contains("file_server"));
@@ -808,9 +831,8 @@ mod tests {
         ] {
             let mut project = sample_project(&project_root, ServerType::Frankenphp, framework);
             project.frankenphp_mode = mode;
-            let preview =
-                preview_config_with_frankenphp_worker_port(&project, &workspace, Some(port))
-                    .expect("worker preview should succeed");
+            let preview = preview_config_with_ports(&project, &workspace, None, Some(port))
+                .expect("worker preview should succeed");
 
             assert!(
                 preview

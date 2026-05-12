@@ -239,6 +239,16 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
           FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS project_php_fastcgi_backends (
+          project_id TEXT PRIMARY KEY NOT NULL,
+          php_version TEXT NOT NULL,
+          port INTEGER NOT NULL UNIQUE,
+          log_path TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path);
         CREATE INDEX IF NOT EXISTS idx_projects_domain ON projects(domain);
         CREATE INDEX IF NOT EXISTS idx_project_env_vars_project_id ON project_env_vars(project_id);
@@ -262,6 +272,8 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
         CREATE INDEX IF NOT EXISTS idx_project_frankenphp_octane_workers_status ON project_frankenphp_octane_workers(status);
         CREATE INDEX IF NOT EXISTS idx_project_frankenphp_workers_status ON project_frankenphp_workers(status);
         CREATE INDEX IF NOT EXISTS idx_project_frankenphp_workers_mode ON project_frankenphp_workers(mode);
+        CREATE INDEX IF NOT EXISTS idx_project_php_fastcgi_backends_port ON project_php_fastcgi_backends(port);
+        CREATE INDEX IF NOT EXISTS idx_project_php_fastcgi_backends_php_version ON project_php_fastcgi_backends(php_version);
 
         INSERT OR IGNORE INTO schema_migrations (version, applied_at)
         VALUES ('0001_initial_schema', CURRENT_TIMESTAMP);
@@ -278,7 +290,39 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
     migrate_repair_project_foreign_keys(&connection)?;
     migrate_frankenphp_octane_workers(&connection)?;
     migrate_frankenphp_worker_framework_expansion(&connection)?;
+    migrate_project_php_fastcgi_backends(&connection)?;
     ServiceRepository::seed_defaults(&connection)?;
+
+    Ok(())
+}
+
+fn migrate_project_php_fastcgi_backends(connection: &Connection) -> Result<(), AppError> {
+    const MIGRATION: &str = "0012_project_php_fastcgi_backends";
+    if migration_applied(connection, MIGRATION)? {
+        return Ok(());
+    }
+
+    connection.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS project_php_fastcgi_backends (
+          project_id TEXT PRIMARY KEY NOT NULL,
+          php_version TEXT NOT NULL,
+          port INTEGER NOT NULL UNIQUE,
+          log_path TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_project_php_fastcgi_backends_port
+        ON project_php_fastcgi_backends(port);
+
+        CREATE INDEX IF NOT EXISTS idx_project_php_fastcgi_backends_php_version
+        ON project_php_fastcgi_backends(php_version);
+        ",
+    )?;
+
+    record_migration(connection, MIGRATION)?;
 
     Ok(())
 }
@@ -1281,6 +1325,30 @@ mod tests {
                 )
                 .expect("phase 29 optional tool type should be accepted");
         }
+
+        fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn migration_creates_project_php_fastcgi_backends_table() {
+        let db_path = temp_db_path("project-fastcgi-backends");
+        init_database(&db_path).expect("database migrations should run");
+
+        let connection = Connection::open(&db_path).expect("migrated db should open");
+        let sql: String = connection
+            .query_row(
+                "
+                SELECT sql
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'project_php_fastcgi_backends'
+                ",
+                [],
+                |row| row.get(0),
+            )
+            .expect("backend table should exist");
+
+        assert!(sql.contains("project_id TEXT PRIMARY KEY"));
+        assert!(sql.contains("port INTEGER NOT NULL UNIQUE"));
 
         fs::remove_file(db_path).ok();
     }

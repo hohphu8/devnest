@@ -13,7 +13,8 @@ use crate::models::tunnel::ProjectTunnelState;
 use crate::state::AppState;
 use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
 use crate::storage::repositories::{
-    ProjectPersistentHostnameRepository, ProjectRepository, RuntimeVersionRepository, now_iso,
+    ProjectPersistentHostnameRepository, ProjectPhpFastcgiBackendRepository, ProjectRepository,
+    RuntimeVersionRepository, now_iso,
 };
 use crate::utils::paths::{managed_config_root, managed_persistent_tunnel_root, managed_ssl_root};
 use crate::utils::windows::hosts_file_path;
@@ -96,6 +97,25 @@ fn octane_worker_port_for_config(
             project.frankenphp_mode.clone(),
         )?
         .worker_port,
+    ))
+}
+
+fn php_fastcgi_port_for_config(
+    connection: &Connection,
+    state: &AppState,
+    project: &Project,
+) -> Result<Option<u16>, AppError> {
+    if !matches!(project.server_type, ServerType::Apache | ServerType::Nginx) {
+        return Ok(None);
+    }
+
+    Ok(Some(
+        ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+            connection,
+            &state.workspace_dir,
+            project,
+        )?
+        .port as u16,
     ))
 }
 
@@ -455,10 +475,12 @@ pub fn run_preflight(
                 )
             })?;
             let project = ProjectRepository::get(connection, project_id)?;
+            let php_fastcgi_port = php_fastcgi_port_for_config(connection, state, &project)?;
             let octane_worker_port = octane_worker_port_for_config(connection, state, &project)?;
-            let preview = config_generator::preview_config_with_frankenphp_worker_port(
+            let preview = config_generator::preview_config_with_ports(
                 &project,
                 &state.workspace_dir,
+                php_fastcgi_port,
                 octane_worker_port,
             );
             match preview {
@@ -746,10 +768,12 @@ pub fn inspect_project_state(
     let project = ProjectRepository::get(connection, project_id)?;
     let diagnostics = diagnostics::run_diagnostics(connection, state, project_id)?;
     let services = service_manager::get_all_service_status(connection, state)?;
+    let php_fastcgi_port = php_fastcgi_port_for_config(connection, state, &project)?;
     let octane_worker_port = octane_worker_port_for_config(connection, state, &project)?;
-    let preview = config_generator::preview_config_with_frankenphp_worker_port(
+    let preview = config_generator::preview_config_with_ports(
         &project,
         &state.workspace_dir,
+        php_fastcgi_port,
         octane_worker_port,
     );
     let persistent_hostname =

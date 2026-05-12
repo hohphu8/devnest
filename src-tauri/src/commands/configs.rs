@@ -3,7 +3,7 @@ use crate::error::AppError;
 use crate::models::project::{FrankenphpMode, ServerType};
 use crate::state::AppState;
 use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
-use crate::storage::repositories::ProjectRepository;
+use crate::storage::repositories::{ProjectPhpFastcgiBackendRepository, ProjectRepository};
 use rusqlite::Connection;
 
 fn connection_from_state(state: &AppState) -> Result<Connection, AppError> {
@@ -32,6 +32,19 @@ pub fn preview_vhost_config(
 ) -> Result<PreviewVhostConfigResult, AppError> {
     let connection = connection_from_state(&state)?;
     let project = ProjectRepository::get(&connection, &project_id)?;
+    let php_fastcgi_port = if matches!(project.server_type, ServerType::Apache | ServerType::Nginx)
+    {
+        Some(
+            ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+                &connection,
+                &state.workspace_dir,
+                &project,
+            )?
+            .port as u16,
+        )
+    } else {
+        None
+    };
     let worker_port = if !matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
         Some(
             FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
@@ -45,9 +58,10 @@ pub fn preview_vhost_config(
     } else {
         None
     };
-    let rendered = config_generator::preview_config_with_frankenphp_worker_port(
+    let rendered = config_generator::preview_config_with_ports(
         &project,
         &state.workspace_dir,
+        php_fastcgi_port,
         worker_port,
     )?;
 
@@ -65,6 +79,19 @@ pub fn generate_vhost_config(
 ) -> Result<GenerateVhostConfigResult, AppError> {
     let connection = connection_from_state(&state)?;
     let project = ProjectRepository::get(&connection, &project_id)?;
+    let php_fastcgi_port = if matches!(project.server_type, ServerType::Apache | ServerType::Nginx)
+    {
+        Some(
+            ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+                &connection,
+                &state.workspace_dir,
+                &project,
+            )?
+            .port as u16,
+        )
+    } else {
+        None
+    };
     let worker_port = if !matches!(project.frankenphp_mode, FrankenphpMode::Classic) {
         Some(
             FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
@@ -78,10 +105,11 @@ pub fn generate_vhost_config(
     } else {
         None
     };
-    let rendered = config_generator::generate_config_with_aliases_and_frankenphp_worker_port(
+    let rendered = config_generator::generate_config_with_aliases_and_ports(
         &project,
         &state.workspace_dir,
         &[],
+        php_fastcgi_port,
         worker_port,
     )?;
 

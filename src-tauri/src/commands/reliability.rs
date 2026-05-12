@@ -5,7 +5,7 @@ use crate::commands::persistent_tunnels::{
 use crate::commands::tunnels::{start_project_tunnel_internal, stop_project_tunnel_internal};
 use crate::core::{config_generator, reliability, runtime_registry, service_manager};
 use crate::error::AppError;
-use crate::models::project::{FrameworkType, FrankenphpMode, UpdateProjectPatch};
+use crate::models::project::{FrameworkType, FrankenphpMode, ServerType, UpdateProjectPatch};
 use crate::models::reliability::{
     ActionPreflightReport, ReliabilityAction, ReliabilityInspectorSnapshot, ReliabilityLayer,
     ReliabilityTransferResult, RepairExecutionResult, RepairWorkflow, RepairWorkflowInfo,
@@ -15,7 +15,8 @@ use crate::models::service::{ServiceName, ServiceStatus};
 use crate::state::AppState;
 use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
 use crate::storage::repositories::{
-    ProjectPersistentHostnameRepository, ProjectRepository, RuntimeVersionRepository, now_iso,
+    ProjectPersistentHostnameRepository, ProjectPhpFastcgiBackendRepository, ProjectRepository,
+    RuntimeVersionRepository, now_iso,
 };
 use rusqlite::Connection;
 use std::path::PathBuf;
@@ -114,6 +115,21 @@ fn repair_project_workflow(
     let aliases = ProjectPersistentHostnameRepository::get_by_project(connection, project_id)?
         .map(|item| vec![item.hostname])
         .unwrap_or_default();
+    let php_fastcgi_port = if matches!(
+        refreshed.server_type,
+        ServerType::Apache | ServerType::Nginx
+    ) {
+        Some(
+            ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+                connection,
+                &state.workspace_dir,
+                &refreshed,
+            )?
+            .port as u16,
+        )
+    } else {
+        None
+    };
     let worker_port = if !matches!(refreshed.frankenphp_mode, FrankenphpMode::Classic) {
         Some(
             FrankenphpOctaneWorkerRepository::get_or_create_for_mode(
@@ -127,10 +143,11 @@ fn repair_project_workflow(
     } else {
         None
     };
-    let _ = config_generator::generate_config_with_aliases_and_frankenphp_worker_port(
+    let _ = config_generator::generate_config_with_aliases_and_ports(
         &refreshed,
         &state.workspace_dir,
         &aliases,
+        php_fastcgi_port,
         worker_port,
     )?;
     let _ = hosts::apply_hosts_entry(refreshed.domain.clone(), None)?;

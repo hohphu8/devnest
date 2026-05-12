@@ -10,8 +10,9 @@ use crate::models::tunnel::TunnelStatus;
 use crate::state::{AppState, ManagedServiceProcess};
 use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
 use crate::storage::repositories::{
-    OptionalToolVersionRepository, ProjectPersistentHostnameRepository, ProjectRepository,
-    RuntimeVersionRepository, ServiceRepository,
+    OptionalToolVersionRepository, ProjectPersistentHostnameRepository,
+    ProjectPhpFastcgiBackendRepository, ProjectRepository, RuntimeVersionRepository,
+    ServiceRepository,
 };
 use crate::utils::process::{
     configure_background_command, is_process_running, kill_process_tree, running_process_ids,
@@ -166,6 +167,10 @@ fn php_process_key(version: &str) -> String {
     format!("php-{version}")
 }
 
+fn project_php_process_key(project_id: &str) -> String {
+    format!("php-project-{project_id}")
+}
+
 fn is_php_fastcgi_process_name(process_name: Option<&str>) -> bool {
     process_name
         .map(|name| matches!(name.trim().to_ascii_lowercase().as_str(), "php-cgi" | "php"))
@@ -204,25 +209,11 @@ fn service_uses_php_fastcgi(service: &ServiceName) -> bool {
     matches!(service, ServiceName::Apache | ServiceName::Nginx)
 }
 
-fn required_php_versions_for_service(
+fn required_php_versions_for_optional_web_tools(
     connection: &Connection,
     service: &ServiceName,
 ) -> Result<Vec<String>, AppError> {
-    let server_type = server_type_for_service(service);
-
-    let Some(server_type) = server_type else {
-        return Ok(Vec::new());
-    };
-
-    let projects = ProjectRepository::list(connection)?;
     let mut versions = BTreeSet::new();
-
-    for project in projects {
-        if service_uses_php_fastcgi(service) && project_matches_server_type(&project, &server_type)
-        {
-            versions.insert(project.php_version);
-        }
-    }
 
     if service_uses_php_fastcgi(service)
         && OptionalToolVersionRepository::find_active_by_type(
@@ -361,6 +352,19 @@ pub(crate) fn sync_managed_configs_for_service(
     for project in ProjectRepository::list(connection)? {
         if project_matches_server_type(&project, &server_type) {
             let aliases = public_host_aliases_for_project(connection, state, &project.id)?;
+            let php_fastcgi_port =
+                if matches!(project.server_type, ServerType::Apache | ServerType::Nginx) {
+                    Some(
+                        ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+                            connection,
+                            &state.workspace_dir,
+                            &project,
+                        )?
+                        .port as u16,
+                    )
+                } else {
+                    None
+                };
             let worker_port = if !matches!(
                 project.frankenphp_mode,
                 crate::models::project::FrankenphpMode::Classic
@@ -377,10 +381,11 @@ pub(crate) fn sync_managed_configs_for_service(
             } else {
                 None
             };
-            config_generator::generate_config_with_aliases_and_frankenphp_worker_port(
+            config_generator::generate_config_with_aliases_and_ports(
                 &project,
                 &state.workspace_dir,
                 &aliases,
+                php_fastcgi_port,
                 worker_port,
             )?;
         }
@@ -457,7 +462,8 @@ fn sync_phpmyadmin_config_for_service(
 
 fn start_php_fastcgi_process(
     state: &AppState,
-    version: &str,
+    label: &str,
+    process_key: String,
     runtime: runtime_registry::RuntimeCommand,
 ) -> Result<(), AppError> {
     if let Some(port) = runtime.port {
@@ -474,9 +480,7 @@ fn start_php_fastcgi_process(
         if !port_check.available {
             return Err(AppError::with_details(
                 "PHP_FASTCGI_PORT_IN_USE",
-                format!(
-                    "PHP {version} could not start because FastCGI port {port} is already in use."
-                ),
+                format!("{label} could not start because FastCGI port {port} is already in use."),
                 format!(
                     "pid={:?}, processName={:?}",
                     port_check.pid, port_check.process_name
@@ -489,7 +493,7 @@ fn start_php_fastcgi_process(
         fs::create_dir_all(parent).map_err(|error| {
             AppError::with_details(
                 "PHP_FASTCGI_START_FAILED",
-                format!("Could not create the PHP {version} log directory."),
+                format!("Could not create the {label} log directory."),
                 error.to_string(),
             )
         })?;
@@ -502,14 +506,14 @@ fn start_php_fastcgi_process(
         .map_err(|error| {
             AppError::with_details(
                 "PHP_FASTCGI_START_FAILED",
-                format!("Could not open the PHP {version} log file."),
+                format!("Could not open the {label} log file."),
                 error.to_string(),
             )
         })?;
     let stderr = stdout.try_clone().map_err(|error| {
         AppError::with_details(
             "PHP_FASTCGI_START_FAILED",
-            format!("Could not duplicate the PHP {version} log stream."),
+            format!("Could not duplicate the {label} log stream."),
             error.to_string(),
         )
     })?;
@@ -530,7 +534,7 @@ fn start_php_fastcgi_process(
     let mut child = command.spawn().map_err(|error| {
         AppError::with_details(
             "PHP_FASTCGI_START_FAILED",
-            format!("Could not start PHP {version} FastCGI."),
+            format!("Could not start {label}."),
             error.to_string(),
         )
     })?;
@@ -541,7 +545,7 @@ fn start_php_fastcgi_process(
             let log_tail = log_reader::read_tail(&runtime.log_path, 20)?;
             return Err(AppError::with_details(
                 "PHP_FASTCGI_START_FAILED",
-                format!("PHP {version} FastCGI exited immediately with {status}."),
+                format!("{label} exited immediately with {status}."),
                 if log_tail.is_empty() {
                     "No log output was captured.".to_string()
                 } else {
@@ -553,19 +557,18 @@ fn start_php_fastcgi_process(
         Err(error) => {
             return Err(AppError::with_details(
                 "PHP_FASTCGI_START_FAILED",
-                format!("Could not confirm that PHP {version} FastCGI is running."),
+                format!("Could not confirm that {label} is running."),
                 error.to_string(),
             ));
         }
     }
 
-    let key = php_process_key(version);
     state
         .managed_processes
         .lock()
         .map_err(|_| mutex_error())?
         .insert(
-            key,
+            process_key,
             ManagedServiceProcess {
                 pid: child.id(),
                 child,
@@ -581,7 +584,60 @@ fn ensure_php_fastcgi_processes(
     state: &AppState,
     service: &ServiceName,
 ) -> Result<(), AppError> {
-    for version in required_php_versions_for_service(connection, service)? {
+    let Some(server_type) = server_type_for_service(service) else {
+        return Ok(());
+    };
+
+    for project in ProjectRepository::list(connection)? {
+        if !project_matches_server_type(&project, &server_type) {
+            continue;
+        }
+
+        let backend = ProjectPhpFastcgiBackendRepository::get_or_create_for_project(
+            connection,
+            &state.workspace_dir,
+            &project,
+        )?;
+        let key = project_php_process_key(&project.id);
+        let is_running = {
+            let mut processes = state.managed_processes.lock().map_err(|_| mutex_error())?;
+            let status = if let Some(process) = processes.get_mut(&key) {
+                match process.child.try_wait() {
+                    Ok(Some(_)) => Some(false),
+                    Ok(None) => Some(true),
+                    Err(_) => Some(false),
+                }
+            } else {
+                None
+            };
+
+            if matches!(status, Some(false)) {
+                processes.remove(&key);
+            }
+
+            status.unwrap_or(false)
+        };
+
+        if is_running {
+            continue;
+        }
+
+        let runtime = runtime_registry::resolve_project_php_fastcgi_runtime(
+            connection,
+            &state.workspace_dir,
+            &project.id,
+            &backend.php_version,
+            backend.port as u16,
+            Path::new(&backend.log_path),
+        )?;
+        let label = format!(
+            "PHP {} FastCGI for project {}",
+            backend.php_version, project.name
+        );
+        start_php_fastcgi_process(state, &label, key, runtime)?;
+    }
+
+    for version in required_php_versions_for_optional_web_tools(connection, service)? {
         let key = php_process_key(&version);
         let is_running = {
             let mut processes = state.managed_processes.lock().map_err(|_| mutex_error())?;
@@ -611,7 +667,41 @@ fn ensure_php_fastcgi_processes(
             &state.workspace_dir,
             &version,
         )?;
-        start_php_fastcgi_process(state, &version, runtime)?;
+        let label = format!("PHP {version} FastCGI");
+        start_php_fastcgi_process(state, &label, key, runtime)?;
+    }
+
+    Ok(())
+}
+
+pub(crate) fn stop_project_php_fastcgi_process(
+    state: &AppState,
+    project_id: &str,
+) -> Result<(), AppError> {
+    let key = project_php_process_key(project_id);
+    let mut processes = state.managed_processes.lock().map_err(|_| mutex_error())?;
+
+    if let Some(mut process) = processes.remove(&key) {
+        match process.child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                process.child.kill().map_err(|error| {
+                    AppError::with_details(
+                        "PHP_FASTCGI_STOP_FAILED",
+                        "Could not stop the managed project PHP FastCGI process.",
+                        error.to_string(),
+                    )
+                })?;
+                let _ = process.child.wait();
+            }
+            Err(error) => {
+                return Err(AppError::with_details(
+                    "PHP_FASTCGI_STOP_FAILED",
+                    "Could not inspect the managed project PHP FastCGI process before stopping it.",
+                    error.to_string(),
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -1182,6 +1272,10 @@ pub fn stop_service(
                     error.to_string(),
                 ));
             }
+        }
+
+        if service_uses_php_fastcgi(&service) {
+            stop_php_fastcgi_processes(state)?;
         }
 
         return save_stopped_state(connection, &service, expected_port);

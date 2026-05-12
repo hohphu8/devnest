@@ -862,6 +862,33 @@ fn build_php_fastcgi_config(
     )
 }
 
+fn build_project_php_fastcgi_config(
+    connection: &Connection,
+    runtime_home: &Path,
+    workspace_dir: &Path,
+    project_id: &str,
+    version: &str,
+    runtime_id: Option<&str>,
+    error_log_path: &Path,
+) -> Result<PathBuf, AppError> {
+    let php_family = runtime_version_family(version);
+    let state_dir = managed_php_state_dir(workspace_dir, &php_family)
+        .join("projects")
+        .join(project_id);
+    let available_extensions = available_php_extensions(runtime_home);
+
+    build_php_runtime_config(
+        connection,
+        runtime_home,
+        &state_dir,
+        error_log_path,
+        &php_family,
+        runtime_id,
+        &available_extensions,
+        None,
+    )
+}
+
 fn build_frankenphp_php_config(
     connection: &Connection,
     runtime_home: &Path,
@@ -924,6 +951,47 @@ pub fn resolve_php_fastcgi_runtime(
         working_dir: Some(runtime_home),
         port: Some(port),
         log_path: runtime_logs_dir(workspace_dir).join(format!("php-{version}.log")),
+    })
+}
+
+pub fn resolve_project_php_fastcgi_runtime(
+    connection: &Connection,
+    workspace_dir: &Path,
+    project_id: &str,
+    version: &str,
+    port: u16,
+    log_path: &Path,
+) -> Result<RuntimeCommand, AppError> {
+    let tracked_runtime =
+        resolve_runtime_entry_from_registry(connection, &RuntimeType::Php, Some(version))?;
+    let php_binary = tracked_runtime
+        .as_ref()
+        .map(|runtime| PathBuf::from(&runtime.path))
+        .unwrap_or(resolve_php_binary(connection, version)?);
+    let runtime_home = php_runtime_home_from_binary(&php_binary)?;
+    let binary_path = php_fastcgi_binary_from_home(&runtime_home)?;
+    let config_path = build_project_php_fastcgi_config(
+        connection,
+        &runtime_home,
+        workspace_dir,
+        project_id,
+        version,
+        tracked_runtime.as_ref().map(|runtime| runtime.id.as_str()),
+        log_path,
+    )?;
+
+    Ok(RuntimeCommand {
+        binary_path,
+        args: vec![
+            "-b".to_string(),
+            format!("127.0.0.1:{port}"),
+            "-c".to_string(),
+            config_path.to_string_lossy().to_string(),
+        ],
+        env_vars: HashMap::new(),
+        working_dir: Some(runtime_home),
+        port: Some(port),
+        log_path: log_path.to_path_buf(),
     })
 }
 
@@ -2186,8 +2254,9 @@ mod tests {
     use super::{
         build_frankenphp_php_config, parse_frankenphp_embedded_php_version_output,
         parse_runtime_version_output, php_extension_enabled_by_default, php_fastcgi_port,
-        resolve_php_fastcgi_runtime, resolve_runtime_path_from_registry, resolve_service_runtime,
-        runtime_version_family, runtime_version_matches, sync_runtime_versions,
+        resolve_php_fastcgi_runtime, resolve_project_php_fastcgi_runtime,
+        resolve_runtime_path_from_registry, resolve_service_runtime, runtime_version_family,
+        runtime_version_matches, sync_runtime_versions,
     };
     use crate::models::runtime::RuntimeType;
     use crate::models::service::ServiceName;
@@ -2715,6 +2784,60 @@ mod tests {
         assert!(config_path.ends_with(PathBuf::from("php").join("8.4").join("php.ini")));
         assert!(config_content.contains("extension=php_mbstring.dll"));
         assert!(config_content.contains("extension=php_pdo_mysql.dll"));
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn builds_project_php_fastcgi_runtime_with_project_state_and_port() {
+        let _guard = env_lock().lock().expect("env lock should succeed");
+        let (db_path, connection) = setup_test_db();
+        let root = make_root("devnest-project-php-fastcgi");
+        let workspace_dir = root.join("workspace");
+        let runtime_home = root.join("php84");
+        let php_binary = runtime_home.join("php.exe");
+        let php_cgi_binary = runtime_home.join("php-cgi.exe");
+        let ext_dir = runtime_home.join("ext");
+        let log_path = workspace_dir
+            .join("runtime-logs")
+            .join("php-project-demo.log");
+
+        fs::create_dir_all(&ext_dir).expect("ext dir should exist");
+        fs::create_dir_all(&workspace_dir).expect("workspace should exist");
+        fs::write(&php_binary, "fake").expect("fake php binary should write");
+        fs::write(&php_cgi_binary, "fake").expect("fake php-cgi binary should write");
+        fs::write(ext_dir.join("php_mbstring.dll"), "fake").expect("fake extension should write");
+
+        set_env_var("DEVNEST_RUNTIME_PHP_84_BIN", &php_binary);
+        let runtime = resolve_project_php_fastcgi_runtime(
+            &connection,
+            &workspace_dir,
+            "project-demo",
+            "8.4",
+            9200,
+            &log_path,
+        )
+        .expect("project php fastcgi runtime should resolve");
+        remove_env_var("DEVNEST_RUNTIME_PHP_84_BIN");
+
+        let config_path = PathBuf::from(&runtime.args[3]);
+        let config_content = fs::read_to_string(&config_path).expect("php.ini should exist");
+
+        assert_eq!(runtime.port, Some(9200));
+        assert_eq!(runtime.binary_path, php_cgi_binary);
+        assert_eq!(runtime.log_path, log_path);
+        assert!(
+            config_path.ends_with(
+                PathBuf::from("php")
+                    .join("8.4")
+                    .join("projects")
+                    .join("project-demo")
+                    .join("php.ini")
+            )
+        );
+        assert!(config_content.contains("session.save_path="));
+        assert!(config_content.contains("php-project-demo.log"));
 
         fs::remove_dir_all(root).ok();
         fs::remove_file(db_path).ok();

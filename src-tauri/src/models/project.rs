@@ -154,6 +154,17 @@ pub struct Project {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPhpFastcgiBackend {
+    pub project_id: String,
+    pub php_version: String,
+    pub port: i64,
+    pub log_path: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateProjectInput {

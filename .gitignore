@@ -27,6 +27,7 @@ aetherone/
 *.key
 *.key.pub
 *.pem
+!src-tauri/resources/certs/cacert.pem
 *.pfx
 *.p12
 *.crt

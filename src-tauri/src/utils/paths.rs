@@ -131,6 +131,12 @@ pub fn managed_php_state_dir(workspace_dir: &Path, version: &str) -> PathBuf {
         .join(version.replace('/', "-"))
 }
 
+pub fn managed_php_ca_bundle_path(workspace_dir: &Path) -> PathBuf {
+    managed_service_state_root(workspace_dir)
+        .join("certs")
+        .join("cacert.pem")
+}
+
 pub fn bundled_runtime_root(resources_dir: &Path) -> PathBuf {
     resources_dir.join("runtimes")
 }

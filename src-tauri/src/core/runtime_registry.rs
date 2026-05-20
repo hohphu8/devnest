@@ -11,8 +11,8 @@ use crate::storage::repositories::{
     RuntimeSuppressionRepository, RuntimeVersionRepository,
 };
 use crate::utils::paths::{
-    bundled_runtime_type_dir, managed_php_state_dir, managed_server_config_dir,
-    managed_service_state_dir, normalize_for_config,
+    bundled_runtime_type_dir, managed_php_ca_bundle_path, managed_php_state_dir,
+    managed_server_config_dir, managed_service_state_dir, normalize_for_config,
 };
 use crate::utils::process::{configure_background_command, split_command_args};
 use rusqlite::Connection;
@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SUPPORTED_PHP_FAMILIES: &[&str] = &["7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"];
+const PHP_CA_BUNDLE: &str = include_str!("../../resources/certs/cacert.pem");
 
 #[derive(Debug, Clone)]
 pub struct RuntimeCommand {
@@ -691,9 +692,33 @@ fn disabled_php_functions(overrides: &HashMap<String, bool>) -> Vec<String> {
         .collect()
 }
 
+fn ensure_php_ca_bundle(workspace_dir: &Path) -> Result<PathBuf, AppError> {
+    let ca_bundle_path = managed_php_ca_bundle_path(workspace_dir);
+    if let Some(parent) = ca_bundle_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            AppError::with_details(
+                "PHP_CA_BUNDLE_WRITE_FAILED",
+                "DevNest could not create the managed PHP certificate directory.",
+                error.to_string(),
+            )
+        })?;
+    }
+
+    fs::write(&ca_bundle_path, PHP_CA_BUNDLE).map_err(|error| {
+        AppError::with_details(
+            "PHP_CA_BUNDLE_WRITE_FAILED",
+            "DevNest could not write the managed CA bundle used by PHP cURL and OpenSSL.",
+            error.to_string(),
+        )
+    })?;
+
+    Ok(ca_bundle_path)
+}
+
 fn build_php_runtime_config(
     connection: &Connection,
     runtime_home: &Path,
+    workspace_dir: &Path,
     state_dir: &Path,
     error_log_path: &Path,
     version: &str,
@@ -771,6 +796,7 @@ fn build_php_runtime_config(
         .join("\n");
     let disabled_functions = disabled_php_functions(&function_overrides).join(",");
     let runtime_config = load_php_runtime_config(connection, runtime_id)?;
+    let ca_bundle_path = ensure_php_ca_bundle(workspace_dir)?;
     let config_path = state_dir.join("php.ini");
     let content = format!(
         "[PHP]\n\
@@ -791,6 +817,8 @@ fn build_php_runtime_config(
          upload_tmp_dir=\"{temp_dir}\"\n\
          session.save_path=\"{session_dir}\"\n\
          error_log=\"{error_log}\"\n\
+         curl.cainfo=\"{ca_bundle_path}\"\n\
+         openssl.cafile=\"{ca_bundle_path}\"\n\
          log_errors=On\n\
          display_errors={display_errors}\n\
          error_reporting={error_reporting}\n\
@@ -821,6 +849,7 @@ fn build_php_runtime_config(
         temp_dir = normalize_for_config(&temp_dir),
         session_dir = normalize_for_config(&session_dir),
         error_log = normalize_for_config(error_log_path),
+        ca_bundle_path = normalize_for_config(&ca_bundle_path),
         display_errors = if runtime_config.display_errors {
             "On"
         } else {
@@ -853,6 +882,7 @@ fn build_php_fastcgi_config(
     build_php_runtime_config(
         connection,
         runtime_home,
+        workspace_dir,
         &state_dir,
         &error_log_path,
         &php_family,
@@ -880,6 +910,7 @@ fn build_project_php_fastcgi_config(
     build_php_runtime_config(
         connection,
         runtime_home,
+        workspace_dir,
         &state_dir,
         error_log_path,
         &php_family,
@@ -908,6 +939,7 @@ fn build_frankenphp_php_config(
     build_php_runtime_config(
         connection,
         runtime_home,
+        workspace_dir,
         &state_dir,
         &error_log_path,
         php_family,
@@ -2268,7 +2300,7 @@ mod tests {
     use rusqlite::Connection;
     use std::collections::BTreeMap;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Mutex, OnceLock};
     use uuid::Uuid;
 
@@ -2301,6 +2333,20 @@ mod tests {
     fn remove_env_var<K: AsRef<std::ffi::OsStr>>(key: K) {
         // Runtime registry tests serialize environment mutations with env_lock.
         unsafe { std::env::remove_var(key) }
+    }
+
+    fn assert_php_ca_bundle_configured(workspace_dir: &Path, config_content: &str) {
+        let ca_bundle_path = crate::utils::paths::managed_php_ca_bundle_path(workspace_dir);
+        assert!(ca_bundle_path.exists());
+        let ca_bundle_content =
+            fs::read_to_string(&ca_bundle_path).expect("managed CA bundle should be readable");
+        assert!(ca_bundle_content.contains("BEGIN CERTIFICATE"));
+
+        let normalized_ca_bundle_path = crate::utils::paths::normalize_for_config(&ca_bundle_path);
+        assert!(config_content.contains(&format!("curl.cainfo=\"{normalized_ca_bundle_path}\"")));
+        assert!(
+            config_content.contains(&format!("openssl.cafile=\"{normalized_ca_bundle_path}\""))
+        );
     }
 
     #[test]
@@ -2540,6 +2586,7 @@ mod tests {
         assert!(config_content.contains("memory_limit=768M"));
         assert!(config_content.contains("display_errors=Off"));
         assert!(config_content.contains("date.timezone=Asia/Ho_Chi_Minh"));
+        assert_php_ca_bundle_configured(&workspace_dir, &config_content);
 
         fs::remove_dir_all(root).ok();
         fs::remove_file(db_path).ok();
@@ -2784,6 +2831,7 @@ mod tests {
         assert!(config_path.ends_with(PathBuf::from("php").join("8.4").join("php.ini")));
         assert!(config_content.contains("extension=php_mbstring.dll"));
         assert!(config_content.contains("extension=php_pdo_mysql.dll"));
+        assert_php_ca_bundle_configured(&workspace_dir, &config_content);
 
         fs::remove_dir_all(root).ok();
         fs::remove_file(db_path).ok();
@@ -2838,6 +2886,7 @@ mod tests {
         );
         assert!(config_content.contains("session.save_path="));
         assert!(config_content.contains("php-project-demo.log"));
+        assert_php_ca_bundle_configured(&workspace_dir, &config_content);
 
         fs::remove_dir_all(root).ok();
         fs::remove_file(db_path).ok();
@@ -2863,6 +2912,7 @@ mod tests {
 
         assert!(config_content.contains("extension=php_mbstring.dll"));
         assert!(config_content.contains("extension=php_pdo_mysql.dll"));
+        assert_php_ca_bundle_configured(&workspace_dir, &config_content);
         assert!(
             config_path.ends_with(
                 PathBuf::from("frankenphp")

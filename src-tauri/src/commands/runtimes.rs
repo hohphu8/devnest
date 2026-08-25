@@ -18,15 +18,44 @@ use crate::utils::paths::{
     bundled_runtime_root, downloaded_runtime_root, downloaded_runtime_type_dir,
     managed_runtime_root, managed_runtime_type_dir,
 };
+use crate::utils::perf;
 use crate::utils::windows::reveal_in_explorer;
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
+use std::time::SystemTime;
 use tauri::Manager;
 
 fn connection_from_state(state: &AppState) -> Result<Connection, AppError> {
     Ok(Connection::open(&state.db_path)?)
+}
+
+fn cached_frankenphp_php_family(path: &Path) -> Option<String> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Option<SystemTime>, Option<String>)>>> =
+        OnceLock::new();
+    let modified_at = path
+        .metadata()
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Ok(cached) = cache.lock() {
+        if let Some((cached_modified_at, php_family)) = cached.get(path) {
+            if *cached_modified_at == modified_at {
+                return php_family.clone();
+            }
+        }
+    }
+
+    let php_family = runtime_registry::frankenphp_embedded_php_family(path).ok();
+    if let Ok(mut cached) = cache.lock() {
+        cached.insert(path.to_path_buf(), (modified_at, php_family.clone()));
+    }
+    php_family
 }
 
 fn current_runtime_install_task(state: &AppState) -> Result<Option<RuntimeInstallTask>, AppError> {
@@ -94,7 +123,7 @@ fn to_inventory_item(
             runtime.runtime_type,
             crate::models::runtime::RuntimeType::Frankenphp
         ) {
-        runtime_registry::frankenphp_embedded_php_family(runtime_path).ok()
+        cached_frankenphp_php_family(runtime_path)
     } else {
         None
     };
@@ -191,21 +220,45 @@ fn managed_runtime_container_path(
     None
 }
 
-pub(crate) fn list_runtime_inventory_snapshot(
+fn runtime_inventory_from_repository(
     connection: &Connection,
     state: &AppState,
 ) -> Result<Vec<RuntimeInventoryItem>, AppError> {
-    runtime_registry::sync_runtime_versions(
-        connection,
-        &state.workspace_dir,
-        &state.resources_dir,
-    )?;
     let runtimes = RuntimeVersionRepository::list(connection)?;
 
     Ok(runtimes
         .into_iter()
         .map(|runtime| to_inventory_item(runtime, &state.workspace_dir, &state.resources_dir))
         .collect())
+}
+
+pub(crate) fn list_runtime_inventory_snapshot(
+    connection: &Connection,
+    state: &AppState,
+) -> Result<Vec<RuntimeInventoryItem>, AppError> {
+    let runtimes = RuntimeVersionRepository::list(connection)?;
+    if runtimes.is_empty() {
+        runtime_registry::sync_runtime_versions(
+            connection,
+            &state.workspace_dir,
+            &state.resources_dir,
+        )?;
+    }
+    runtime_inventory_from_repository(connection, state)
+}
+
+fn refresh_runtime_inventory_snapshot(
+    connection: &Connection,
+    state: &AppState,
+) -> Result<Vec<RuntimeInventoryItem>, AppError> {
+    let started_at = Instant::now();
+    runtime_registry::sync_runtime_versions(
+        connection,
+        &state.workspace_dir,
+        &state.resources_dir,
+    )?;
+    perf::log_elapsed("runtime inventory discovery", started_at);
+    runtime_inventory_from_repository(connection, state)
 }
 
 pub(crate) fn set_active_runtime_internal(
@@ -243,6 +296,14 @@ pub fn list_runtime_inventory(
 ) -> Result<Vec<RuntimeInventoryItem>, AppError> {
     let connection = connection_from_state(&state)?;
     list_runtime_inventory_snapshot(&connection, &state)
+}
+
+#[tauri::command]
+pub fn refresh_runtime_inventory(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<RuntimeInventoryItem>, AppError> {
+    let connection = connection_from_state(&state)?;
+    refresh_runtime_inventory_snapshot(&connection, &state)
 }
 
 #[tauri::command]

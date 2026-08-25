@@ -98,12 +98,12 @@ use crate::commands::runtime_configs::{
 };
 use crate::commands::runtimes::{
     get_runtime_install_task, import_runtime_path, install_runtime_package, link_runtime_path,
-    list_runtime_inventory, list_runtime_packages, remove_runtime_reference, reveal_runtime_path,
-    set_active_runtime, verify_runtime_path,
+    list_runtime_inventory, list_runtime_packages, refresh_runtime_inventory,
+    remove_runtime_reference, reveal_runtime_path, set_active_runtime, verify_runtime_path,
 };
 use crate::commands::services::{
-    get_all_service_status, get_service_status, open_service_dashboard, restart_service,
-    start_service, stop_service,
+    get_all_service_status, get_service_status, open_service_dashboard, recover_web_port_from_wsl,
+    restart_service, start_service, stop_service,
 };
 use crate::commands::ssl::{
     get_local_ssl_authority_status, open_project_site, regenerate_project_ssl_certificate,
@@ -137,6 +137,9 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const BOOT_BACKGROUND_COMPLETE_EVENT: &str = "devnest:boot-background-complete";
+const BOOT_SERVICE_SETTLE_DELAY: Duration = Duration::from_secs(3);
+const BOOT_SERVICE_STABILIZATION_DELAY: Duration = Duration::from_secs(2);
+const BOOT_SERVICE_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(5)];
 
 fn boot_timestamp() -> String {
     let now = SystemTime::now()
@@ -167,15 +170,78 @@ fn ensure_service_running(
     service: ServiceName,
 ) -> Result<(), AppError> {
     let current = service_manager::get_service_status(connection, state, service.clone())?;
-    if matches!(current.status, ServiceStatus::Running) {
+    if matches!(current.status, ServiceStatus::Running) && current.pid.is_some() {
         return Ok(());
     }
 
-    service_manager::start_service(connection, state, service)?;
-    Ok(())
+    service_manager::start_service(connection, state, service.clone())?;
+    thread::sleep(BOOT_SERVICE_STABILIZATION_DELAY);
+    let stabilized = service_manager::get_service_status(connection, state, service.clone())?;
+    if matches!(stabilized.status, ServiceStatus::Running) && stabilized.pid.is_some() {
+        return Ok(());
+    }
+
+    Err(AppError::with_details(
+        "SERVICE_START_FAILED",
+        format!(
+            "{} stopped during startup stabilization.",
+            service.display_name()
+        ),
+        stabilized
+            .last_error
+            .unwrap_or_else(|| "The service process did not remain running.".to_string()),
+    ))
+}
+
+fn is_retryable_boot_service_error(error: &AppError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "SERVICE_START_FAILED" | "PORT_CHECK_FAILED" | "PROCESS_LOOKUP_FAILED"
+    )
+}
+
+fn run_boot_operation_with_retry<F, S>(
+    mut operation: F,
+    retry_delays: &[Duration],
+    mut sleep: S,
+) -> Result<(), AppError>
+where
+    F: FnMut() -> Result<(), AppError>,
+    S: FnMut(Duration),
+{
+    for attempt in 0..=retry_delays.len() {
+        match operation() {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if attempt < retry_delays.len() && is_retryable_boot_service_error(&error) =>
+            {
+                sleep(retry_delays[attempt]);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    unreachable!("boot retry loop always returns")
+}
+
+fn save_boot_service_error(connection: &Connection, service: &ServiceName, error: &AppError) {
+    let Ok(current) =
+        crate::storage::repositories::ServiceRepository::get(connection, service.as_str())
+    else {
+        return;
+    };
+    let _ = crate::storage::repositories::ServiceRepository::save_state(
+        connection,
+        service,
+        &ServiceStatus::Error,
+        None,
+        current.port,
+        Some(error.message.as_str()),
+    );
 }
 
 fn auto_start_boot_services(connection: &Connection, state: &AppState) {
+    thread::sleep(BOOT_SERVICE_SETTLE_DELAY);
     for service in [
         Some(ServiceName::Mysql),
         preferred_boot_web_service(connection).ok().flatten(),
@@ -184,13 +250,90 @@ fn auto_start_boot_services(connection: &Connection, state: &AppState) {
             continue;
         };
 
-        if let Err(error) = ensure_service_running(connection, state, service.clone()) {
+        let result = run_boot_operation_with_retry(
+            || ensure_service_running(connection, state, service.clone()),
+            &BOOT_SERVICE_RETRY_DELAYS,
+            thread::sleep,
+        );
+        if let Err(error) = result {
+            save_boot_service_error(connection, &service, &error);
             eprintln!(
                 "DevNest boot auto-start failed for {}: {}",
                 service.display_name(),
                 error
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod boot_service_tests {
+    use super::run_boot_operation_with_retry;
+    use crate::error::AppError;
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    #[test]
+    fn retries_transient_service_start_failures() {
+        let attempts = Cell::new(0);
+        let sleeps = Cell::new(0);
+        let result = run_boot_operation_with_retry(
+            || {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() < 2 {
+                    Err(AppError::new_validation(
+                        "SERVICE_START_FAILED",
+                        "transient failure",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+            &[Duration::from_secs(2), Duration::from_secs(5)],
+            |_| sleeps.set(sleeps.get() + 1),
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(sleeps.get(), 1);
+    }
+
+    #[test]
+    fn does_not_retry_persistent_port_conflicts() {
+        let attempts = Cell::new(0);
+        let result = run_boot_operation_with_retry(
+            || {
+                attempts.set(attempts.get() + 1);
+                Err(AppError::new_validation(
+                    "WSL_PORT_CONFLICT",
+                    "WSL owns port 80",
+                ))
+            },
+            &[Duration::from_secs(2), Duration::from_secs(5)],
+            |_| panic!("persistent conflicts must not sleep"),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[test]
+    fn stops_after_the_configured_attempt_limit() {
+        let attempts = Cell::new(0);
+        let result = run_boot_operation_with_retry(
+            || {
+                attempts.set(attempts.get() + 1);
+                Err(AppError::new_validation(
+                    "PORT_CHECK_FAILED",
+                    "transient failure",
+                ))
+            },
+            &[Duration::from_secs(2), Duration::from_secs(5)],
+            |_| {},
+        );
+
+        assert!(result.is_err());
+        assert_eq!(attempts.get(), 3);
     }
 }
 
@@ -225,6 +368,14 @@ fn start_scheduled_task_scheduler(state: &AppState) {
                 scheduled_task_shutdown,
             );
         });
+}
+
+fn start_scheduled_task_history_maintenance(state: &AppState) {
+    let db_path = state.db_path.clone();
+    let shutdown = Arc::clone(&state.scheduled_task_scheduler_shutdown);
+    let _ = thread::Builder::new()
+        .name("devnest-scheduled-task-maintenance".to_string())
+        .spawn(move || scheduled_task_manager::run_history_maintenance_loop(db_path, shutdown));
 }
 
 fn start_database_time_machine_scheduler(state: &AppState) {
@@ -276,6 +427,25 @@ fn start_background_boot_tasks<R: tauri::Runtime>(app_handle: tauri::AppHandle<R
             };
 
             let phase_started_at = Instant::now();
+            if let Err(error) = runtime_registry::sync_runtime_versions(
+                &connection,
+                &state.workspace_dir,
+                &state.resources_dir,
+            ) {
+                eprintln!("DevNest background runtime registry sync failed: {error}");
+            }
+            perf::log_elapsed("boot background runtime registry sync", phase_started_at);
+
+            let phase_started_at = Instant::now();
+            if let Err(error) = php_cli_environment::sync_active_php_cli_environment(
+                &connection,
+                &state.workspace_dir,
+            ) {
+                eprintln!("DevNest background PHP CLI sync failed: {error}");
+            }
+            perf::log_elapsed("boot background php cli sync", phase_started_at);
+
+            let phase_started_at = Instant::now();
             auto_start_boot_services(&connection, &state);
             perf::log_elapsed("boot background services", phase_started_at);
 
@@ -291,6 +461,7 @@ fn start_background_boot_tasks<R: tauri::Runtime>(app_handle: tauri::AppHandle<R
             auto_resume_boot_scheduled_tasks(&connection);
             perf::log_elapsed("boot background scheduled task resume", phase_started_at);
 
+            start_scheduled_task_history_maintenance(&state);
             start_scheduled_task_scheduler(&state);
             let _ = app_handle.emit(BOOT_BACKGROUND_COMPLETE_EVENT, ());
             perf::log_elapsed("boot background total", started_at);
@@ -391,16 +562,6 @@ pub fn run() {
             init_database(&db_path)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
             perf::log_elapsed("boot database init", phase_started_at);
-            let phase_started_at = Instant::now();
-            let connection = Connection::open(&db_path)
-                .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
-            runtime_registry::sync_runtime_versions(&connection, &workspace_dir, &resources_dir)
-                .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
-            perf::log_elapsed("boot runtime registry sync", phase_started_at);
-            let phase_started_at = Instant::now();
-            php_cli_environment::sync_active_php_cli_environment(&connection, &workspace_dir)
-                .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
-            perf::log_elapsed("boot php cli sync", phase_started_at);
             let phase_started_at = Instant::now();
             ensure_launch_at_login_registered();
             perf::log_elapsed("boot launch at login sync", phase_started_at);
@@ -516,6 +677,7 @@ pub fn run() {
             start_service,
             stop_service,
             restart_service,
+            recover_web_port_from_wsl,
             open_service_dashboard,
             read_service_logs,
             clear_service_logs,
@@ -550,6 +712,7 @@ pub fn run() {
             list_database_snapshots,
             rollback_database_snapshot,
             list_runtime_inventory,
+            refresh_runtime_inventory,
             list_runtime_packages,
             verify_runtime_path,
             link_runtime_path,

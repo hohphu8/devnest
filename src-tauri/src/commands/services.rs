@@ -5,11 +5,27 @@ use crate::models::service::ServiceName;
 use crate::models::service::ServiceState;
 use crate::state::AppState;
 use crate::storage::repositories::ServiceRepository;
+use crate::utils::perf;
 use crate::utils::windows::open_url_in_default_browser;
 use rusqlite::Connection;
+use std::time::Instant;
 
 fn connection_from_state(state: &AppState) -> Result<Connection, AppError> {
     Ok(Connection::open(&state.db_path)?)
+}
+
+fn timed_service_action<F>(
+    action: &str,
+    service_name: &str,
+    operation: F,
+) -> Result<ServiceState, AppError>
+where
+    F: FnOnce() -> Result<ServiceState, AppError>,
+{
+    let started_at = Instant::now();
+    let result = operation();
+    perf::log_elapsed(&format!("service {action} {service_name}"), started_at);
+    result
 }
 
 #[tauri::command]
@@ -35,9 +51,11 @@ pub fn start_service(
     name: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<ServiceState, AppError> {
-    let connection = connection_from_state(&state)?;
-    let service = ServiceRepository::get(&connection, &name)?;
-    service_manager::start_service(&connection, &state, service.name)
+    timed_service_action("start", &name, || {
+        let connection = connection_from_state(&state)?;
+        let service = ServiceRepository::get(&connection, &name)?;
+        service_manager::start_service(&connection, &state, service.name)
+    })
 }
 
 #[tauri::command]
@@ -45,19 +63,21 @@ pub fn stop_service(
     name: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<ServiceState, AppError> {
-    let connection = connection_from_state(&state)?;
-    let service = ServiceRepository::get(&connection, &name)?;
-    let service_name = service.name;
-    let stopped = service_manager::stop_service(&connection, &state, service_name.clone())?;
-    if matches!(service_name, ServiceName::Frankenphp) {
-        frankenphp_octane_manager::mark_stale_for_frankenphp_stop(&connection, &state)?;
-    }
-    persistent_tunnels::reset_persistent_tunnels_for_origin_service_stop(
-        &connection,
-        &state,
-        &service_name,
-    )?;
-    Ok(stopped)
+    timed_service_action("stop", &name, || {
+        let connection = connection_from_state(&state)?;
+        let service = ServiceRepository::get(&connection, &name)?;
+        let service_name = service.name;
+        let stopped = service_manager::stop_service(&connection, &state, service_name.clone())?;
+        if matches!(service_name, ServiceName::Frankenphp) {
+            frankenphp_octane_manager::mark_stale_for_frankenphp_stop(&connection, &state)?;
+        }
+        persistent_tunnels::reset_persistent_tunnels_for_origin_service_stop(
+            &connection,
+            &state,
+            &service_name,
+        )?;
+        Ok(stopped)
+    })
 }
 
 #[tauri::command]
@@ -65,9 +85,21 @@ pub fn restart_service(
     name: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<ServiceState, AppError> {
+    timed_service_action("restart", &name, || {
+        let connection = connection_from_state(&state)?;
+        let service = ServiceRepository::get(&connection, &name)?;
+        service_manager::restart_service(&connection, &state, service.name)
+    })
+}
+
+#[tauri::command]
+pub fn recover_web_port_from_wsl(
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ServiceState, AppError> {
     let connection = connection_from_state(&state)?;
     let service = ServiceRepository::get(&connection, &name)?;
-    service_manager::restart_service(&connection, &state, service.name)
+    service_manager::recover_web_port_from_wsl(&connection, &state, service.name)
 }
 
 #[tauri::command]

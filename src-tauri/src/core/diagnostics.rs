@@ -246,28 +246,55 @@ fn push_port_issue(
 
     let port_check = ports::check_port(port)?;
     if !port_check.available && service.status != ServiceStatus::Running {
+        let is_wsl_conflict = matches!(
+            port_check.conflict_source,
+            Some(ports::PortConflictSource::Wsl)
+        );
         items.push(item(
             project,
             DiagnosticLevel::Error,
-            "PORT_IN_USE",
-            "Web server port is already in use",
-            format!(
-                "{} cannot safely start because port {} is already used by {}.",
-                project_server_label(project),
-                port,
-                port_check
-                    .process_name
-                    .as_deref()
-                    .unwrap_or("another process")
-            ),
-            Some(format!(
-                "Stop the conflicting process{} or switch the runtime to another port before starting {}.",
-                port_check
-                    .pid
-                    .map(|pid| format!(" (PID {pid})"))
-                    .unwrap_or_default(),
-                project_server_label(project)
-            )),
+            if is_wsl_conflict {
+                "WSL_PORT_CONFLICT"
+            } else {
+                "PORT_IN_USE"
+            },
+            if is_wsl_conflict {
+                "WSL is using the web server port"
+            } else {
+                "Web server port is already in use"
+            },
+            if is_wsl_conflict {
+                format!(
+                    "{} cannot start because WSL is using port {}.",
+                    project_server_label(project),
+                    port
+                )
+            } else {
+                format!(
+                    "{} cannot safely start because port {} is already used by {}.",
+                    project_server_label(project),
+                    port,
+                    port_check
+                        .process_name
+                        .as_deref()
+                        .unwrap_or("another process")
+                )
+            },
+            Some(if is_wsl_conflict {
+                format!(
+                    "Open Services and use Shutdown WSL & Retry for {}.",
+                    project_server_label(project)
+                )
+            } else {
+                format!(
+                    "Stop the conflicting process{} or switch the runtime to another port before starting {}.",
+                    port_check
+                        .pid
+                        .map(|pid| format!(" (PID {pid})"))
+                        .unwrap_or_default(),
+                    project_server_label(project)
+                )
+            }),
             created_at,
         ));
     }

@@ -16,6 +16,8 @@ interface ServiceInspectorProps {
   onStop: () => Promise<void> | void;
   onOpenLogs: () => void;
   onOpenDashboard?: () => Promise<void> | void;
+  onRecoverWsl: () => Promise<void> | void;
+  wslRecoveryBusy?: boolean;
 }
 
 function serviceLabel(name: ServiceName): string {
@@ -77,6 +79,8 @@ export function ServiceInspector({
   portCheck,
   service,
   onOpenDashboard,
+  onRecoverWsl,
+  wslRecoveryBusy = false,
 }: ServiceInspectorProps) {
   if (!service) {
     return (
@@ -180,6 +184,24 @@ export function ServiceInspector({
             <span>
               Managed Redis defaults to local no-password access. Use Redis config if the workspace needs a password.
             </span>
+          </div>
+        ) : null}
+
+        {portCheck?.conflictSource === "wsl" ? (
+          <div className="inline-note-card" data-tone="warning">
+            <strong>WSL is using port {portCheck.port}</strong>
+            <span>
+              Shut down all running WSL distributions, release the port, and retry {serviceLabel(service.name)}.
+            </span>
+            <Button
+              busy={wslRecoveryBusy}
+              busyLabel="Shutting down WSL..."
+              className="inline-note-action"
+              disabled={busy}
+              onClick={() => void onRecoverWsl()}
+            >
+              Shutdown WSL &amp; Retry
+            </Button>
           </div>
         ) : null}
 

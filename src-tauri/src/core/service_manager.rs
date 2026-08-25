@@ -1,6 +1,6 @@
 use crate::core::config_generator;
 use crate::core::log_reader;
-use crate::core::ports;
+use crate::core::ports::{self, PortConflictSource};
 use crate::core::runtime_registry;
 use crate::error::AppError;
 use crate::models::project::ServerType;
@@ -14,8 +14,9 @@ use crate::storage::repositories::{
     ProjectPhpFastcgiBackendRepository, ProjectRepository, RuntimeVersionRepository,
     ServiceRepository,
 };
+use crate::utils::paths::managed_logs_dir;
 use crate::utils::process::{
-    configure_background_command, is_process_running, kill_process_tree, running_process_ids,
+    configure_background_command, is_process_running, kill_process_tree, process_names, run_command,
 };
 use rusqlite::Connection;
 use std::collections::BTreeSet;
@@ -23,13 +24,66 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const MANAGED_LOG_ROTATION_BYTES: u64 = 10 * 1024 * 1024;
 
 struct SyncResult {
     running_pid: Option<u32>,
     exited: bool,
     exit_success: bool,
     exit_message: Option<String>,
+}
+
+fn rotate_log_if_needed(path: &Path) -> Result<bool, AppError> {
+    let Ok(metadata) = path.metadata() else {
+        return Ok(false);
+    };
+    if metadata.len() <= MANAGED_LOG_ROTATION_BYTES {
+        return Ok(false);
+    }
+
+    let extension = path
+        .extension()
+        .map(|value| format!("{}.1", value.to_string_lossy()))
+        .unwrap_or_else(|| "1".to_string());
+    let backup_path = path.with_extension(extension);
+    if backup_path.exists() {
+        fs::remove_file(&backup_path)?;
+    }
+    fs::rename(path, backup_path)?;
+    Ok(true)
+}
+
+fn rotate_managed_web_logs(workspace_dir: &Path, service: &ServiceName) {
+    let server_name = match service {
+        ServiceName::Apache => "apache",
+        ServiceName::Nginx => "nginx",
+        ServiceName::Frankenphp => "frankenphp",
+        _ => return,
+    };
+    let Ok(entries) = fs::read_dir(managed_logs_dir(workspace_dir)) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if !file_name.ends_with(&format!("-{server_name}-access.log"))
+            && !file_name.ends_with(&format!("-{server_name}-error.log"))
+        {
+            continue;
+        }
+        if let Err(error) = rotate_log_if_needed(&path) {
+            eprintln!(
+                "DevNest could not rotate managed log {}: {error}",
+                path.display()
+            );
+        }
+    }
 }
 
 fn mutex_error() -> AppError {
@@ -175,6 +229,22 @@ fn is_php_fastcgi_process_name(process_name: Option<&str>) -> bool {
     process_name
         .map(|name| matches!(name.trim().to_ascii_lowercase().as_str(), "php-cgi" | "php"))
         .unwrap_or(false)
+}
+
+fn is_service_process_name(service: &ServiceName, process_name: Option<&str>) -> bool {
+    let Some(process_name) = process_name else {
+        return false;
+    };
+    let normalized = process_name.trim().to_ascii_lowercase();
+
+    match service {
+        ServiceName::Apache => matches!(normalized.as_str(), "httpd" | "apache" | "apache2"),
+        ServiceName::Nginx => normalized == "nginx",
+        ServiceName::Frankenphp => normalized == "frankenphp",
+        ServiceName::Mysql => matches!(normalized.as_str(), "mysqld" | "mariadbd"),
+        ServiceName::Mailpit => normalized == "mailpit",
+        ServiceName::Redis => matches!(normalized.as_str(), "redis-server" | "redis"),
+    }
 }
 
 fn server_type_for_service(service: &ServiceName) -> Option<ServerType> {
@@ -499,6 +569,13 @@ fn start_php_fastcgi_process(
         })?;
     }
 
+    if let Err(error) = rotate_log_if_needed(&runtime.log_path) {
+        eprintln!(
+            "DevNest could not rotate FastCGI log {}: {error}",
+            runtime.log_path.display()
+        );
+    }
+
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
@@ -754,17 +831,30 @@ fn guard_service_ports(service: &ServiceName, primary_port: Option<u16>) -> Resu
     if let Some(port) = primary_port {
         let port_check = ports::check_port(port)?;
         if !port_check.available {
+            let is_wsl_conflict =
+                matches!(port_check.conflict_source, Some(PortConflictSource::Wsl));
             return Err(AppError::with_details(
-                "PORT_IN_USE",
-                format!(
-                    "Port {} is already in use by {}. Stop the conflicting process before starting {}.",
-                    port,
-                    port_check
-                        .process_name
-                        .as_deref()
-                        .unwrap_or("another process"),
-                    service.display_name()
-                ),
+                if is_wsl_conflict {
+                    "WSL_PORT_CONFLICT"
+                } else {
+                    "PORT_IN_USE"
+                },
+                if is_wsl_conflict {
+                    format!(
+                        "WSL is using port {port}. Shut down WSL and retry {}.",
+                        service.display_name()
+                    )
+                } else {
+                    format!(
+                        "Port {} is already in use by {}. Stop the conflicting process before starting {}.",
+                        port,
+                        port_check
+                            .process_name
+                            .as_deref()
+                            .unwrap_or("another process"),
+                        service.display_name()
+                    )
+                },
                 format!(
                     "pid={:?}, processName={:?}",
                     port_check.pid, port_check.process_name
@@ -796,6 +886,80 @@ fn guard_service_ports(service: &ServiceName, primary_port: Option<u16>) -> Resu
     }
 
     Ok(())
+}
+
+fn shutdown_wsl() -> Result<(), AppError> {
+    let output = run_command("wsl.exe", &["--shutdown".to_string()]).map_err(|error| {
+        AppError::with_details(
+            "WSL_SHUTDOWN_FAILED",
+            "DevNest could not shut down WSL.",
+            error.to_string(),
+        )
+    })?;
+
+    if !output.status.success() {
+        return Err(AppError::with_details(
+            "WSL_SHUTDOWN_FAILED",
+            "DevNest could not shut down WSL.",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn recover_web_port_from_wsl(
+    connection: &Connection,
+    state: &AppState,
+    service: ServiceName,
+) -> Result<ServiceState, AppError> {
+    if !is_managed_web_service(&service) {
+        return Err(AppError::new_validation(
+            "WSL_RECOVERY_UNSUPPORTED_SERVICE",
+            "WSL port recovery is only available for managed web servers.",
+        ));
+    }
+
+    let current = get_service_status(connection, state, service.clone())?;
+    let port = current
+        .port
+        .or_else(|| service.default_port().map(i64::from))
+        .and_then(|value| u16::try_from(value).ok())
+        .ok_or_else(|| {
+            AppError::new_validation(
+                "WSL_RECOVERY_PORT_MISSING",
+                "DevNest could not resolve the web server port.",
+            )
+        })?;
+    let port_check = ports::check_port(port)?;
+
+    if port_check.available {
+        return start_service(connection, state, service);
+    }
+    if !matches!(port_check.conflict_source, Some(PortConflictSource::Wsl)) {
+        return Err(AppError::new_validation(
+            "WSL_PORT_CONFLICT_NOT_FOUND",
+            format!("Port {port} is not currently owned by WSL."),
+        ));
+    }
+
+    if matches!(current.status, ServiceStatus::Running) || current.pid.is_some() {
+        stop_service(connection, state, service.clone())?;
+    }
+    shutdown_wsl()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if ports::check_port(port)?.available {
+            return start_service(connection, state, service);
+        }
+        if Instant::now() >= deadline {
+            return Err(AppError::new_validation(
+                "WSL_PORT_RELEASE_TIMEOUT",
+                format!("WSL shut down, but port {port} was not released in time."),
+            ));
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
 }
 
 pub fn get_service_status(
@@ -839,7 +1003,10 @@ pub fn get_service_status(
     }
 
     if let Some(pid) = current.pid {
-        if is_process_running(pid as u32)? {
+        let process_name = process_names(&[pid as u32])?
+            .remove(&(pid as u32))
+            .flatten();
+        if is_service_process_name(&service, process_name.as_deref()) {
             return save_running_state(
                 connection,
                 &service,
@@ -958,7 +1125,7 @@ pub fn get_all_service_status(
         synchronized.push(SynchronizedService::Ready(current));
     }
 
-    let running_pids = running_process_ids(&persisted_pids)?;
+    let process_name_by_pid = process_names(&persisted_pids)?;
     synchronized
         .into_iter()
         .map(|service| match service {
@@ -968,7 +1135,12 @@ pub fn get_all_service_status(
                 expected_port,
                 pid,
             } => {
-                if running_pids.contains(&pid) {
+                if is_service_process_name(
+                    &service,
+                    process_name_by_pid
+                        .get(&pid)
+                        .and_then(|process_name| process_name.as_deref()),
+                ) {
                     save_running_state(
                         connection,
                         &service,
@@ -1002,6 +1174,13 @@ fn start_runtime_process(
                 error.to_string(),
             )
         })?;
+    }
+
+    if let Err(error) = rotate_log_if_needed(&runtime.log_path) {
+        eprintln!(
+            "DevNest could not rotate service log {}: {error}",
+            runtime.log_path.display()
+        );
     }
 
     let stdout = OpenOptions::new()
@@ -1163,6 +1342,7 @@ pub fn start_service(
     }
 
     if is_managed_web_service(&service) {
+        rotate_managed_web_logs(&state.workspace_dir, &service);
         sync_managed_configs_for_service(connection, state, &service)?;
         ensure_frankenphp_runtime_compatibility(connection, &service)?;
     }
@@ -1339,9 +1519,10 @@ pub fn resolve_service_log_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        clear_service_logs, get_service_status, is_php_fastcgi_process_name,
-        public_host_aliases_for_project, read_service_logs, start_service, stop_service,
-        sync_managed_configs_for_service,
+        MANAGED_LOG_ROTATION_BYTES, clear_service_logs, get_service_status,
+        is_php_fastcgi_process_name, is_service_process_name, public_host_aliases_for_project,
+        read_service_logs, recover_web_port_from_wsl, rotate_log_if_needed, start_service,
+        stop_service, sync_managed_configs_for_service,
     };
     use crate::models::persistent_tunnel::PersistentTunnelProvider;
     use crate::models::project::{CreateProjectInput, FrameworkType, ServerType};
@@ -1349,10 +1530,13 @@ mod tests {
     use crate::models::tunnel::{ProjectTunnelState, TunnelProvider, TunnelStatus};
     use crate::state::AppState;
     use crate::storage::db::init_database;
-    use crate::storage::repositories::{ProjectPersistentHostnameRepository, ProjectRepository};
+    use crate::storage::repositories::{
+        ProjectPersistentHostnameRepository, ProjectRepository, ServiceRepository,
+    };
     use rusqlite::Connection;
     use std::collections::HashMap;
     use std::fs;
+    use std::net::TcpListener;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use uuid::Uuid;
@@ -1492,6 +1676,66 @@ mod tests {
         assert!(is_php_fastcgi_process_name(Some("PHP")));
         assert!(!is_php_fastcgi_process_name(Some("httpd")));
         assert!(!is_php_fastcgi_process_name(None));
+    }
+
+    #[test]
+    fn validates_persisted_pid_process_names_by_service() {
+        assert!(is_service_process_name(&ServiceName::Apache, Some("httpd")));
+        assert!(is_service_process_name(
+            &ServiceName::Mysql,
+            Some("mariadbd")
+        ));
+        assert!(!is_service_process_name(
+            &ServiceName::Apache,
+            Some("wslhost")
+        ));
+        assert!(!is_service_process_name(&ServiceName::Nginx, None));
+    }
+
+    #[test]
+    fn rotates_oversized_managed_logs_with_one_backup() {
+        let path = std::env::temp_dir().join(format!("devnest-rotate-{}.log", Uuid::new_v4()));
+        let file = fs::File::create(&path).expect("log should create");
+        file.set_len(MANAGED_LOG_ROTATION_BYTES + 1)
+            .expect("log should resize");
+
+        assert!(rotate_log_if_needed(&path).expect("log should rotate"));
+        assert!(!path.exists());
+        assert!(path.with_extension("log.1").exists());
+        fs::remove_file(path.with_extension("log.1")).ok();
+    }
+
+    #[test]
+    fn rejects_wsl_recovery_for_non_web_services() {
+        let (_root, _workspace_dir, state, connection) = setup_state();
+        let error = recover_web_port_from_wsl(&connection, &state, ServiceName::Mysql)
+            .expect_err("MySQL must not expose WSL web-port recovery");
+
+        assert_eq!(error.code, "WSL_RECOVERY_UNSUPPORTED_SERVICE");
+    }
+
+    #[test]
+    fn refuses_wsl_shutdown_for_non_wsl_port_owners() {
+        let (_root, _workspace_dir, state, connection) = setup_state();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test port should bind");
+        let port = listener
+            .local_addr()
+            .expect("test listener should have an address")
+            .port();
+        ServiceRepository::save_state(
+            &connection,
+            &ServiceName::Apache,
+            &ServiceStatus::Stopped,
+            None,
+            Some(i64::from(port)),
+            None,
+        )
+        .expect("Apache test port should persist");
+
+        let error = recover_web_port_from_wsl(&connection, &state, ServiceName::Apache)
+            .expect_err("non-WSL owners must not trigger WSL shutdown");
+
+        assert_eq!(error.code, "WSL_PORT_CONFLICT_NOT_FOUND");
     }
 
     #[test]

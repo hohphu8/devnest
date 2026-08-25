@@ -18,6 +18,7 @@ export interface PortCheckResult {
   available: boolean;
   pid?: number | null;
   processName?: string | null;
+  conflictSource?: "wsl" | "other" | "unknown" | null;
 }
 
 export interface ServiceLogLine {

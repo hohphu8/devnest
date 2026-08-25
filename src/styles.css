@@ -1639,6 +1639,11 @@ a {
   overflow-wrap: anywhere;
 }
 
+.inline-note-action {
+  justify-self: start;
+  margin-top: 4px;
+}
+
 .inline-note-card strong {
   font-size: 13px;
 }
@@ -2464,6 +2469,14 @@ a {
 .project-detail-stage,
 .route-loading-shell {
   position: relative;
+}
+
+.route-loading {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .project-detail-stage {

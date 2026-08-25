@@ -5,6 +5,14 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PortConflictSource {
+    Wsl,
+    Other,
+    Unknown,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortCheckResult {
@@ -12,6 +20,7 @@ pub struct PortCheckResult {
     pub available: bool,
     pub pid: Option<u32>,
     pub process_name: Option<String>,
+    pub conflict_source: Option<PortConflictSource>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +89,22 @@ fn run_netstat_output() -> Result<String, AppError> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+fn conflict_source(process_name: Option<&str>) -> PortConflictSource {
+    let Some(process_name) = process_name else {
+        return PortConflictSource::Unknown;
+    };
+    let normalized = process_name.trim().to_ascii_lowercase();
+
+    if matches!(
+        normalized.as_str(),
+        "wsl" | "wslhost" | "wslrelay" | "vmmemwsl"
+    ) {
+        PortConflictSource::Wsl
+    } else {
+        PortConflictSource::Other
+    }
+}
+
 pub fn check_ports(ports: &[u16]) -> Result<Vec<PortCheckResult>, AppError> {
     let requested_ports = ports.iter().copied().collect::<BTreeSet<_>>();
     if requested_ports.is_empty() {
@@ -95,12 +120,14 @@ pub fn check_ports(ports: &[u16]) -> Result<Vec<PortCheckResult>, AppError> {
         .into_iter()
         .map(|port| {
             let pid = pid_by_port.get(&port).copied();
+            let process_name =
+                pid.and_then(|value| process_name_by_pid.get(&value).cloned().flatten());
             PortCheckResult {
                 port,
                 available: pid.is_none(),
                 pid,
-                process_name: pid
-                    .and_then(|value| process_name_by_pid.get(&value).cloned().flatten()),
+                conflict_source: pid.map(|_| conflict_source(process_name.as_deref())),
+                process_name,
             }
         })
         .collect())
@@ -155,7 +182,7 @@ pub fn check_port(port: u16) -> Result<PortCheckResult, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_port, check_ports_cached};
+    use super::{PortConflictSource, check_port, check_ports_cached, conflict_source};
     use std::net::TcpListener;
     use std::time::Duration;
 
@@ -178,5 +205,18 @@ mod tests {
         let result = check_ports_cached(&[], Duration::from_secs(1)).expect("empty cache read");
 
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn classifies_known_wsl_port_owners() {
+        for process_name in ["wsl", "WSLHOST", "wslrelay", "vmmemWSL"] {
+            assert_eq!(conflict_source(Some(process_name)), PortConflictSource::Wsl);
+        }
+    }
+
+    #[test]
+    fn does_not_guess_that_system_or_unknown_owners_are_wsl() {
+        assert_eq!(conflict_source(Some("System")), PortConflictSource::Other);
+        assert_eq!(conflict_source(None), PortConflictSource::Unknown);
     }
 }

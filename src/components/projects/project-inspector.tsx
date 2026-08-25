@@ -76,6 +76,7 @@ function quickFixActionLabel(code: string): string {
 
   switch (code) {
     case "PORT_IN_USE":
+    case "WSL_PORT_CONFLICT":
     case "MYSQL_STARTUP_FAILED":
     case "SERVICE_RUNTIME_ERROR":
       return "Open Services";
@@ -1494,6 +1495,7 @@ export function ProjectInspector({
   function openQuickFix(code: string) {
     switch (code) {
       case "PORT_IN_USE":
+      case "WSL_PORT_CONFLICT":
       case "MYSQL_STARTUP_FAILED":
       case "SERVICE_RUNTIME_ERROR":
         navigate("/services");

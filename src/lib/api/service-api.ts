@@ -7,6 +7,8 @@ export const serviceApi = {
   start: (name: ServiceName) => tauriInvoke<ServiceState>("start_service", { name }),
   stop: (name: ServiceName) => tauriInvoke<ServiceState>("stop_service", { name }),
   restart: (name: ServiceName) => tauriInvoke<ServiceState>("restart_service", { name }),
+  recoverWebPortFromWsl: (name: ServiceName) =>
+    tauriInvoke<ServiceState>("recover_web_port_from_wsl", { name }),
   openDashboard: (name: ServiceName) =>
     tauriInvoke<boolean>("open_service_dashboard", { name }),
   readLogs: (name: ServiceName, lines = 200) =>

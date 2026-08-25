@@ -261,9 +261,35 @@ pub fn read_tail_payload(
     })
 }
 
+pub fn payload_from_text(source_name: &str, content: &str) -> LogPayload {
+    let normalized = normalize_log_content(content);
+    let lines = normalized
+        .lines()
+        .enumerate()
+        .map(|(index, text)| LogLine {
+            id: format!("{source_name}:{index}"),
+            text: text.to_string(),
+            severity: infer_severity(text),
+            line_number: Some(index + 1),
+        })
+        .collect::<Vec<_>>();
+
+    LogPayload {
+        name: source_name.to_string(),
+        total_lines: lines.len(),
+        truncated: false,
+        content: lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        lines,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{clear, read_tail, read_tail_payload};
+    use super::{clear, payload_from_text, read_tail, read_tail_payload};
     use std::fs;
     use uuid::Uuid;
 
@@ -276,6 +302,15 @@ mod tests {
 
         assert_eq!(tail, "three\nfour");
         fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn builds_payload_without_creating_a_file() {
+        let payload = payload_from_text("Skipped run", "Previous run is still active.");
+
+        assert_eq!(payload.total_lines, 1);
+        assert_eq!(payload.content, "Previous run is still active.");
+        assert_eq!(payload.lines[0].line_number, Some(1));
     }
 
     #[test]

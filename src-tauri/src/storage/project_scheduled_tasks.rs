@@ -8,7 +8,7 @@ use crate::models::scheduled_task::{
 use crate::storage::repositories::{ProjectRepository, now_iso};
 use crate::utils::process::{join_command_args, split_command_args};
 use reqwest::Url;
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde_json::{from_str, to_string};
 use std::path::Path;
 use uuid::Uuid;
@@ -872,6 +872,74 @@ impl ProjectScheduledTaskRunRepository {
         )?)
     }
 
+    pub fn list_prunable_by_task(
+        connection: &Connection,
+        task_id: &str,
+        keep: usize,
+        limit: usize,
+    ) -> Result<Vec<ProjectScheduledTaskRun>, AppError> {
+        let mut statement = connection.prepare(
+            "
+            SELECT *
+            FROM project_scheduled_task_runs
+            WHERE task_id = ?1
+              AND status <> 'running'
+              AND id NOT IN (
+                SELECT id
+                FROM project_scheduled_task_runs
+                WHERE task_id = ?1
+                ORDER BY created_at DESC
+                LIMIT ?2
+              )
+            ORDER BY created_at ASC
+            LIMIT ?3
+            ",
+        )?;
+        let rows = statement.query_map(params![task_id, keep as i64, limit as i64], |row| {
+            map_run_row(row).map_err(|_| rusqlite::Error::ExecuteReturnedResults)
+        })?;
+        let mut runs = Vec::new();
+        for row in rows {
+            runs.push(row?);
+        }
+
+        Ok(runs)
+    }
+
+    pub fn delete_by_ids(connection: &Connection, run_ids: &[String]) -> Result<usize, AppError> {
+        if run_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let placeholders = std::iter::repeat("?")
+            .take(run_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("DELETE FROM project_scheduled_task_runs WHERE id IN ({placeholders})");
+        Ok(connection.execute(&sql, params_from_iter(run_ids))?)
+    }
+
+    pub fn mark_stale_running_as_interrupted(
+        connection: &Connection,
+        finished_at: &str,
+    ) -> Result<usize, AppError> {
+        Ok(connection.execute(
+            "
+            UPDATE project_scheduled_task_runs
+            SET
+              finished_at = COALESCE(finished_at, ?1),
+              duration_ms = COALESCE(duration_ms, 0),
+              status = 'error',
+              error_message = COALESCE(
+                error_message,
+                'Interrupted because DevNest exited before this run completed.'
+              )
+            WHERE status = 'running'
+            ",
+            [finished_at],
+        )?)
+    }
+
     pub fn update_result(
         connection: &Connection,
         run_id: &str,
@@ -906,5 +974,101 @@ impl ProjectScheduledTaskRunRepository {
         )?;
 
         Self::get(connection, run_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProjectScheduledTaskRunRepository;
+    use crate::models::scheduled_task::ProjectScheduledTaskRunStatus;
+    use crate::storage::db::init_database;
+    use rusqlite::{Connection, params};
+    use std::fs;
+    use uuid::Uuid;
+
+    fn setup() -> (std::path::PathBuf, Connection) {
+        let db_path = std::env::temp_dir().join(format!(
+            "devnest-scheduled-task-history-{}.sqlite",
+            Uuid::new_v4()
+        ));
+        init_database(&db_path).expect("database should initialize");
+        let connection = Connection::open(&db_path).expect("database should open");
+        connection
+            .execute_batch("PRAGMA foreign_keys = OFF;")
+            .expect("isolated history fixture should disable foreign keys");
+        (db_path, connection)
+    }
+
+    #[test]
+    fn prunes_only_completed_runs_older_than_retention_window() {
+        let (db_path, connection) = setup();
+        for index in 0..1_105 {
+            connection
+                .execute(
+                    "
+                    INSERT INTO project_scheduled_task_runs (
+                      id, task_id, project_id, started_at, finished_at, duration_ms,
+                      status, log_path, created_at
+                    ) VALUES (?1, 'task-1', 'project-1', ?2, ?2, 1, 'success', '', ?2)
+                    ",
+                    params![
+                        format!("run-{index:04}"),
+                        format!("2026-01-01T00:{index:04}:00Z")
+                    ],
+                )
+                .expect("run should insert");
+        }
+        connection
+            .execute(
+                "
+                INSERT INTO project_scheduled_task_runs (
+                  id, task_id, project_id, started_at, status, log_path, created_at
+                ) VALUES ('active-old', 'task-1', 'project-1', '2025-01-01T00:00:00Z',
+                          'running', '', '2025-01-01T00:00:00Z')
+                ",
+                [],
+            )
+            .expect("active run should insert");
+
+        let candidates = ProjectScheduledTaskRunRepository::list_prunable_by_task(
+            &connection,
+            "task-1",
+            1_000,
+            250,
+        )
+        .expect("prunable runs should list");
+
+        assert_eq!(candidates.len(), 105);
+        assert!(candidates.iter().all(|run| run.id != "active-old"));
+        fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn marks_previous_session_runs_as_interrupted() {
+        let (db_path, connection) = setup();
+        connection
+            .execute(
+                "
+                INSERT INTO project_scheduled_task_runs (
+                  id, task_id, project_id, started_at, status, log_path, created_at
+                ) VALUES ('stale', 'task-1', 'project-1', '2026-01-01T00:00:00Z',
+                          'running', '', '2026-01-01T00:00:00Z')
+                ",
+                [],
+            )
+            .expect("stale run should insert");
+
+        let updated = ProjectScheduledTaskRunRepository::mark_stale_running_as_interrupted(
+            &connection,
+            "2026-01-02T00:00:00Z",
+        )
+        .expect("stale runs should update");
+        let run = ProjectScheduledTaskRunRepository::get(&connection, "stale")
+            .expect("run should remain queryable");
+
+        assert_eq!(updated, 1);
+        assert_eq!(run.status, ProjectScheduledTaskRunStatus::Error);
+        assert!(run.error_message.is_some());
+        fs::remove_file(db_path).ok();
     }
 }

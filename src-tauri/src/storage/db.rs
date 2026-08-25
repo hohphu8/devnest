@@ -268,6 +268,8 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
         CREATE INDEX IF NOT EXISTS idx_project_scheduled_tasks_enabled ON project_scheduled_tasks(enabled);
         CREATE INDEX IF NOT EXISTS idx_project_scheduled_tasks_next_run_at ON project_scheduled_tasks(next_run_at);
         CREATE INDEX IF NOT EXISTS idx_project_scheduled_task_runs_task_id ON project_scheduled_task_runs(task_id);
+        CREATE INDEX IF NOT EXISTS idx_project_scheduled_task_runs_task_created_at
+        ON project_scheduled_task_runs(task_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_project_scheduled_task_runs_project_id ON project_scheduled_task_runs(project_id);
         CREATE INDEX IF NOT EXISTS idx_project_frankenphp_octane_workers_status ON project_frankenphp_octane_workers(status);
         CREATE INDEX IF NOT EXISTS idx_project_frankenphp_workers_status ON project_frankenphp_workers(status);
@@ -291,7 +293,25 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
     migrate_frankenphp_octane_workers(&connection)?;
     migrate_frankenphp_worker_framework_expansion(&connection)?;
     migrate_project_php_fastcgi_backends(&connection)?;
+    migrate_scheduled_task_run_history_index(&connection)?;
     ServiceRepository::seed_defaults(&connection)?;
+
+    Ok(())
+}
+
+fn migrate_scheduled_task_run_history_index(connection: &Connection) -> Result<(), AppError> {
+    const MIGRATION: &str = "0013_scheduled_task_run_history_index";
+    if migration_applied(connection, MIGRATION)? {
+        return Ok(());
+    }
+
+    connection.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_project_scheduled_task_runs_task_created_at
+        ON project_scheduled_task_runs(task_id, created_at DESC);
+        ",
+    )?;
+    record_migration(connection, MIGRATION)?;
 
     Ok(())
 }
@@ -1350,6 +1370,29 @@ mod tests {
         assert!(sql.contains("project_id TEXT PRIMARY KEY"));
         assert!(sql.contains("port INTEGER NOT NULL UNIQUE"));
 
+        fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn migration_indexes_scheduled_task_history_order() {
+        let db_path = temp_db_path("scheduled-task-history-index");
+        init_database(&db_path).expect("database migrations should run");
+        let connection = Connection::open(&db_path).expect("migrated db should open");
+
+        let index_count: i64 = connection
+            .query_row(
+                "
+                SELECT COUNT(*)
+                FROM sqlite_master
+                WHERE type = 'index'
+                  AND name = 'idx_project_scheduled_task_runs_task_created_at'
+                ",
+                [],
+                |row| row.get(0),
+            )
+            .expect("history index should be queryable");
+
+        assert_eq!(index_count, 1);
         fs::remove_file(db_path).ok();
     }
 }

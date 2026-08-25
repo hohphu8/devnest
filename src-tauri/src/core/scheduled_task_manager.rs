@@ -10,6 +10,7 @@ use crate::storage::project_scheduled_tasks::{
     ProjectScheduledTaskRepository, ProjectScheduledTaskRunRepository,
 };
 use crate::storage::repositories::{ProjectRepository, now_iso};
+use crate::utils::perf;
 use crate::utils::process::{configure_background_command, is_process_running, kill_process_tree};
 use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, Local, LocalResult, NaiveDateTime, NaiveTime,
@@ -27,6 +28,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+const HISTORY_RUNS_PER_TASK: usize = 1_000;
+const HISTORY_PRUNE_BATCH_SIZE: usize = 250;
+const HISTORY_PRUNE_BATCH_DELAY: Duration = Duration::from_millis(100);
+const HISTORY_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 fn mutex_error() -> AppError {
     AppError::new_validation(
@@ -1002,13 +1008,6 @@ fn write_skipped_run(
     let started_at = now_iso()?;
     let run_id = Uuid::new_v4().to_string();
     let log_path = task_run_log_path(state, task, &run_id);
-    append_log_line(
-        &log_path,
-        &format!(
-            "{} skipped a due run because the previous execution is still active.",
-            task.name
-        ),
-    )?;
     let run = ProjectScheduledTaskRunRepository::create(
         connection,
         &run_id,
@@ -1048,10 +1047,70 @@ fn write_skipped_run(
 pub fn prepare_auto_resume_project_scheduled_tasks(
     connection: &Connection,
 ) -> Result<(), AppError> {
+    ProjectScheduledTaskRunRepository::mark_stale_running_as_interrupted(connection, &now_iso()?)?;
     for task in ProjectScheduledTaskRepository::list_all(connection)? {
         let _ = resolve_schedule_state_after_resume(connection, &task)?;
     }
     Ok(())
+}
+
+fn prune_history_batch(connection: &Connection) -> Result<usize, AppError> {
+    let started_at = Instant::now();
+    let mut deleted = 0usize;
+    for task in ProjectScheduledTaskRepository::list_all(connection)? {
+        let remaining = HISTORY_PRUNE_BATCH_SIZE.saturating_sub(deleted);
+        if remaining == 0 {
+            break;
+        }
+
+        let candidates = ProjectScheduledTaskRunRepository::list_prunable_by_task(
+            connection,
+            &task.id,
+            HISTORY_RUNS_PER_TASK,
+            remaining,
+        )?;
+        let mut removable_ids = Vec::with_capacity(candidates.len());
+        for run in candidates {
+            let log_path = PathBuf::from(&run.log_path);
+            if remove_task_log_file(&log_path).is_ok() {
+                removable_ids.push(run.id);
+            }
+        }
+        deleted += ProjectScheduledTaskRunRepository::delete_by_ids(connection, &removable_ids)?;
+    }
+
+    if deleted > 0 {
+        connection.execute_batch("PRAGMA optimize; PRAGMA wal_checkpoint(PASSIVE);")?;
+        perf::log_elapsed("scheduled task history prune batch", started_at);
+    }
+    Ok(deleted)
+}
+
+pub fn run_history_maintenance_loop(
+    db_path: PathBuf,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+) {
+    let Ok(connection) = Connection::open(&db_path) else {
+        eprintln!("DevNest scheduled task history maintenance could not open the database.");
+        return;
+    };
+
+    while !shutdown.load(Ordering::Relaxed) {
+        match prune_history_batch(&connection) {
+            Ok(deleted) if deleted > 0 => thread::sleep(HISTORY_PRUNE_BATCH_DELAY),
+            Ok(_) => {
+                let mut waited = Duration::ZERO;
+                while waited < HISTORY_MAINTENANCE_INTERVAL && !shutdown.load(Ordering::Relaxed) {
+                    thread::sleep(Duration::from_secs(1));
+                    waited += Duration::from_secs(1);
+                }
+            }
+            Err(error) => {
+                eprintln!("DevNest scheduled task history maintenance failed: {error}");
+                thread::sleep(Duration::from_secs(5));
+            }
+        }
+    }
 }
 
 fn run_scheduler_tick(connection: &Connection, state: &AppState) -> Result<(), AppError> {
@@ -1274,11 +1333,16 @@ pub fn read_project_scheduled_task_run_logs(
     lines: usize,
 ) -> Result<log_reader::ProjectScheduledTaskRunLogPayload, AppError> {
     let run = ProjectScheduledTaskRunRepository::get(connection, run_id)?;
-    log_reader::read_tail_payload(
-        &PathBuf::from(&run.log_path),
-        &format!("Task Run {}", run.id),
-        lines,
-    )
+    let log_path = PathBuf::from(&run.log_path);
+    if matches!(run.status, ProjectScheduledTaskRunStatus::Skipped) && !log_path.exists() {
+        return Ok(log_reader::payload_from_text(
+            &format!("Task Run {}", run.id),
+            run.error_message
+                .as_deref()
+                .unwrap_or("Skipped because the previous run is still active."),
+        ));
+    }
+    log_reader::read_tail_payload(&log_path, &format!("Task Run {}", run.id), lines)
 }
 
 pub fn clear_project_scheduled_task_logs(

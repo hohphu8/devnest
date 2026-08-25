@@ -102,7 +102,7 @@ import type {
   AppUpdateState,
 } from "@/types/update";
 
-const SERVICE_START_ORDER: ServiceName[] = [
+export const SERVICE_START_ORDER: ServiceName[] = [
   "mysql",
   "redis",
   "mailpit",
@@ -110,33 +110,10 @@ const SERVICE_START_ORDER: ServiceName[] = [
   "nginx",
   "frankenphp",
 ];
-const PROJECTS_VIEW_STORAGE_KEY = "devnest.projects.view-mode";
-const SETTINGS_UPDATE_LAST_CHECKED_KEY =
+export const PROJECTS_VIEW_STORAGE_KEY = "devnest.projects.view-mode";
+export const SETTINGS_UPDATE_LAST_CHECKED_KEY =
   "devnest.settings.updates.last-checked-at";
-const DatabasesRoute = lazy(() => import("@/app/routes/databases-route"));
-const DiagnosticsRoute = lazy(() => import("@/app/routes/diagnostics-route"));
-const LogsRoute = lazy(() => import("@/app/routes/logs-route"));
-const ProjectsRoute = lazy(() => import("@/app/routes/projects-route"));
-const ServicesRoute = lazy(() => import("@/app/routes/services-route"));
-const SettingsRoute = lazy(() => import("@/app/routes/settings-route"));
-const TasksRoute = lazy(() => import("@/app/routes/tasks-route"));
-const WorkersRoute = lazy(() => import("@/app/routes/workers-route"));
-
-function LazyRoute({ children }: { children: React.ReactNode }) {
-  return (
-    <Suspense
-      fallback={
-        <div className="route-loading" role="status">
-          Loading...
-        </div>
-      }
-    >
-      {children}
-    </Suspense>
-  );
-}
-
-function PageLayout({
+export function PageLayout({
   title,
   subtitle,
   actions,
@@ -161,7 +138,13 @@ function PageLayout({
   );
 }
 
-function LoadingScrim({ message, title }: { message: string; title: string }) {
+export function LoadingScrim({
+  message,
+  title,
+}: {
+  message: string;
+  title: string;
+}) {
   return (
     <div aria-live="polite" className="loading-scrim" role="status">
       <div className="loading-scrim-card">
@@ -175,7 +158,7 @@ function LoadingScrim({ message, title }: { message: string; title: string }) {
   );
 }
 
-function useDelayedBusy(active: boolean, delayMs = 160) {
+export function useDelayedBusy(active: boolean, delayMs = 160) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -194,7 +177,7 @@ function useDelayedBusy(active: boolean, delayMs = 160) {
   return visible;
 }
 
-function getStartAllPlan(services: ServiceState[]) {
+export function getStartAllPlan(services: ServiceState[]) {
   const enabled = [...services]
     .filter((service) => service.enabled)
     .sort(
@@ -222,7 +205,7 @@ function getStartAllPlan(services: ServiceState[]) {
   return { startable, skipped };
 }
 
-function mergeSearchParams(
+export function mergeSearchParams(
   searchParams: URLSearchParams,
   patch: Record<string, string | undefined>,
 ) {
@@ -240,11 +223,13 @@ function mergeSearchParams(
   return next;
 }
 
-function parseProjectsViewMode(value: string | null): "list" | "grid" | null {
+export function parseProjectsViewMode(
+  value: string | null,
+): "list" | "grid" | null {
   return value === "grid" || value === "list" ? value : null;
 }
 
-function diagnosticActionLabel(code: string): string {
+export function diagnosticActionLabel(code: string): string {
   switch (code) {
     case "LARAVEL_DOCUMENT_ROOT_MISMATCH":
     case "SSL_AUTHORITY_MISSING":
@@ -271,7 +256,7 @@ function diagnosticActionLabel(code: string): string {
   }
 }
 
-function diagnosticCanAutoFix(code: string): boolean {
+export function diagnosticCanAutoFix(code: string): boolean {
   return (
     code === "LARAVEL_DOCUMENT_ROOT_MISMATCH" ||
     code === "SSL_AUTHORITY_MISSING" ||
@@ -280,7 +265,7 @@ function diagnosticCanAutoFix(code: string): boolean {
   );
 }
 
-function runtimeTypeLabel(runtimeType: RuntimeType): string {
+export function runtimeTypeLabel(runtimeType: RuntimeType): string {
   switch (runtimeType) {
     case "php":
       return "PHP";
@@ -295,18 +280,20 @@ function runtimeTypeLabel(runtimeType: RuntimeType): string {
   }
 }
 
-function phpCliActivationMessage(version: string): string {
+export function phpCliActivationMessage(version: string): string {
   return `PHP ${version} is now active.`;
 }
 
-function withRuntimeDetails(
+export function withRuntimeDetails(
   message: string,
   runtime: Pick<RuntimeInventoryItem, "details">,
 ): string {
   return runtime.details ? `${message} ${runtime.details}` : message;
 }
 
-function runtimeSourceLabel(source: RuntimeInventoryItem["source"]): string {
+export function runtimeSourceLabel(
+  source: RuntimeInventoryItem["source"],
+): string {
   switch (source) {
     case "downloaded":
       return "Downloaded";
@@ -319,7 +306,7 @@ function runtimeSourceLabel(source: RuntimeInventoryItem["source"]): string {
   }
 }
 
-function runtimeFamilyLabel(runtimeType: RuntimeType): string {
+export function runtimeFamilyLabel(runtimeType: RuntimeType): string {
   switch (runtimeType) {
     case "php":
       return "PHP";
@@ -332,7 +319,7 @@ function runtimeFamilyLabel(runtimeType: RuntimeType): string {
   }
 }
 
-function runtimeInstallStageLabel(stage: RuntimeInstallStage): string {
+export function runtimeInstallStageLabel(stage: RuntimeInstallStage): string {
   switch (stage) {
     case "queued":
       return "Queued";
@@ -351,7 +338,7 @@ function runtimeInstallStageLabel(stage: RuntimeInstallStage): string {
   }
 }
 
-function optionalToolLabel(toolType: OptionalToolType): string {
+export function optionalToolLabel(toolType: OptionalToolType): string {
   switch (toolType) {
     case "mailpit":
       return "Mailpit";
@@ -366,7 +353,7 @@ function optionalToolLabel(toolType: OptionalToolType): string {
   }
 }
 
-function optionalToolFamilyLabel(toolType: OptionalToolType): string {
+export function optionalToolFamilyLabel(toolType: OptionalToolType): string {
   switch (toolType) {
     case "mailpit":
       return "Mail Sandbox";
@@ -381,7 +368,7 @@ function optionalToolFamilyLabel(toolType: OptionalToolType): string {
   }
 }
 
-function optionalToolInstallStageLabel(
+export function optionalToolInstallStageLabel(
   stage: OptionalToolInstallStage,
 ): string {
   switch (stage) {
@@ -402,7 +389,7 @@ function optionalToolInstallStageLabel(
   }
 }
 
-function findOptionalToolUpdatePackage(
+export function findOptionalToolUpdatePackage(
   tool: OptionalToolInventoryItem,
   packages: OptionalToolPackage[],
 ): OptionalToolPackage | null {
@@ -432,14 +419,14 @@ function findOptionalToolUpdatePackage(
   )[0];
 }
 
-function compareRuntimeVersions(left: string, right: string): number {
+export function compareRuntimeVersions(left: string, right: string): number {
   return left.localeCompare(right, undefined, {
     numeric: true,
     sensitivity: "base",
   });
 }
 
-function normalizeCatalogVersion(value: string): string {
+export function normalizeCatalogVersion(value: string): string {
   return value
     .trim()
     .replace(/^[^0-9a-z]+/i, "")
@@ -448,7 +435,7 @@ function normalizeCatalogVersion(value: string): string {
     .toLowerCase();
 }
 
-function displayCatalogVersion(value: string): string {
+export function displayCatalogVersion(value: string): string {
   return value
     .trim()
     .replace(/^[^0-9a-z]+/i, "")
@@ -456,7 +443,9 @@ function displayCatalogVersion(value: string): string {
     .replace(/^v/i, "");
 }
 
-function optionalToolHealthLabel(tool: OptionalToolInventoryItem): string {
+export function optionalToolHealthLabel(
+  tool: OptionalToolInventoryItem,
+): string {
   if (tool.status === "missing") {
     return "Missing";
   }
@@ -464,7 +453,7 @@ function optionalToolHealthLabel(tool: OptionalToolInventoryItem): string {
   return tool.isActive ? "Active install" : "Installed";
 }
 
-function findRuntimeUpdatePackage(
+export function findRuntimeUpdatePackage(
   runtime: RuntimeInventoryItem,
   packages: RuntimePackage[],
 ): RuntimePackage | null {
@@ -481,7 +470,7 @@ function findRuntimeUpdatePackage(
   )[0];
 }
 
-function runtimeCanOfferUpdateTo(
+export function runtimeCanOfferUpdateTo(
   runtime: Pick<RuntimeInventoryItem, "runtimeType" | "version" | "phpFamily">,
   candidate: Pick<RuntimePackage, "runtimeType" | "version" | "phpFamily">,
 ): boolean {
@@ -513,7 +502,7 @@ function runtimeCanOfferUpdateTo(
   return true;
 }
 
-function runtimeCatalogKey(
+export function runtimeCatalogKey(
   runtimeType: RuntimeType,
   version: string,
   phpFamily?: string | null,
@@ -526,7 +515,7 @@ function runtimeCatalogKey(
   return `${runtimeType}:${normalizedVersion}`;
 }
 
-function serviceLabel(name: ServiceName): string {
+export function serviceLabel(name: ServiceName): string {
   switch (name) {
     case "apache":
       return "Apache";
@@ -543,7 +532,7 @@ function serviceLabel(name: ServiceName): string {
   }
 }
 
-function optionalToolTypeForService(
+export function optionalToolTypeForService(
   name?: ServiceName | null,
 ): OptionalToolType | null {
   if (name === "mailpit" || name === "redis") {
@@ -553,25 +542,25 @@ function optionalToolTypeForService(
   return null;
 }
 
-function phpExtensionLabel(extensionName: string): string {
+export function phpExtensionLabel(extensionName: string): string {
   return extensionName
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 }
 
-type RecommendedPhpExtensionSource = "bundled" | "download";
+export type RecommendedPhpExtensionSource = "bundled" | "download";
 
-interface RecommendedPhpExtensionSpec {
+export interface RecommendedPhpExtensionSpec {
   extensionName: string;
   source: RecommendedPhpExtensionSource;
   summary: string;
   keywords: string[];
 }
 
-type PhpToolsTab = "extensions" | "policy";
+export type PhpToolsTab = "extensions" | "policy";
 
-const RECOMMENDED_PHP_EXTENSIONS: RecommendedPhpExtensionSpec[] = [
+export const RECOMMENDED_PHP_EXTENSIONS: RecommendedPhpExtensionSpec[] = [
   {
     extensionName: "fileinfo",
     source: "bundled",
@@ -678,11 +667,13 @@ const RECOMMENDED_PHP_EXTENSIONS: RecommendedPhpExtensionSpec[] = [
   },
 ];
 
-const RECOMMENDED_PHP_EXTENSION_BY_NAME = new Map(
+export const RECOMMENDED_PHP_EXTENSION_BY_NAME = new Map(
   RECOMMENDED_PHP_EXTENSIONS.map((spec) => [spec.extensionName, spec] as const),
 );
 
-function isPhpExtensionDisabledByDefault(extensionName: string): boolean {
+export function isPhpExtensionDisabledByDefault(
+  extensionName: string,
+): boolean {
   return (
     extensionName === "snmp" ||
     extensionName === "pdo_firebird" ||
@@ -691,7 +682,7 @@ function isPhpExtensionDisabledByDefault(extensionName: string): boolean {
   );
 }
 
-function phpExtensionAvailabilityLabel(
+export function phpExtensionAvailabilityLabel(
   spec: RecommendedPhpExtensionSpec | null,
   extensionPackage: PhpExtensionPackage | null,
 ): string {
@@ -706,7 +697,7 @@ function phpExtensionAvailabilityLabel(
   return "Imported locally";
 }
 
-function phpExtensionAvailabilityNote(
+export function phpExtensionAvailabilityNote(
   extensionName: string,
   spec: RecommendedPhpExtensionSpec | null,
   extensionPackage: PhpExtensionPackage | null,
@@ -726,7 +717,7 @@ function phpExtensionAvailabilityNote(
   return "Tracked from the local runtime folder rather than DevNest's download catalog.";
 }
 
-function matchesPhpToolsSearch(
+export function matchesPhpToolsSearch(
   query: string,
   values: Array<string | null | undefined>,
 ): boolean {
@@ -740,7 +731,7 @@ function matchesPhpToolsSearch(
     .some((value) => value.toLowerCase().includes(normalizedQuery));
 }
 
-async function waitForNextPaint() {
+export async function waitForNextPaint() {
   await new Promise<void>((resolve) => {
     if (typeof window === "undefined") {
       resolve();
@@ -750,462 +741,3 @@ async function waitForNextPaint() {
     window.requestAnimationFrame(() => resolve());
   });
 }
-
-function DashboardRoute() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
-  const pushToast = useToastStore((state) => state.push);
-  const overview = useWorkspaceStore((state) => state.overview);
-  const workspaceLoading = useWorkspaceStore((state) => state.loading);
-  const portSummaryLoading = useWorkspaceStore(
-    (state) => state.portSummaryLoading,
-  );
-  const workspaceError = useWorkspaceStore((state) => state.error);
-  const refreshOverview = useWorkspaceStore((state) => state.refreshOverview);
-  const projects = useProjectStore((state) => state.projects);
-  const services = useServiceStore((state) => state.services);
-  const startService = useServiceStore((state) => state.startService);
-  const stopService = useServiceStore((state) => state.stopService);
-  const diagnosticsByProject = useDiagnosticsStore(
-    (state) => state.itemsByProject,
-  );
-  const lastRunAtByProject = useDiagnosticsStore(
-    (state) => state.lastRunAtByProject,
-  );
-  const bootState = overview?.bootState ?? null;
-  const error =
-    !bootState && workspaceError
-      ? ({
-          code: "WORKSPACE_OVERVIEW_FAILED",
-          message: workspaceError,
-        } satisfies AppError)
-      : null;
-  const portConflictCount = useMemo(
-    () =>
-      overview?.portSummary.filter(
-        (port) => !port.available && !port.managedOwner,
-      ).length ?? 0,
-    [overview],
-  );
-  const portHealthLoading =
-    (workspaceLoading && !overview) || portSummaryLoading;
-
-  const projectIssueCounts = useMemo(
-    () =>
-      projects.reduce<Record<string, number>>((counts, project) => {
-        counts[project.id] = summarizeDiagnostics(
-          diagnosticsByProject[project.id] ?? [],
-        ).actionable;
-        return counts;
-      }, {}),
-    [diagnosticsByProject, projects],
-  );
-
-  const diagnosticIssueCount = useMemo(
-    () =>
-      Object.values(projectIssueCounts).reduce(
-        (total, count) => total + count,
-        0,
-      ),
-    [projectIssueCounts],
-  );
-
-  const diagnosticsCoverage = useMemo(
-    () =>
-      projects.filter((project) => Boolean(lastRunAtByProject[project.id]))
-        .length,
-    [lastRunAtByProject, projects],
-  );
-  const startAllBusy = useAsyncActionPending("workspace:start-all");
-  const stopAllBusy = useAsyncActionPending("workspace:stop-all");
-  const globalServiceBusy = startAllBusy || stopAllBusy;
-
-  async function handleStartAll() {
-    await runAsyncAction(
-      "workspace:start-all",
-      async () => {
-        const { startable, skipped } = getStartAllPlan(services);
-        const started: string[] = [];
-
-        for (const service of startable) {
-          if (service.status === "running") {
-            continue;
-          }
-
-          try {
-            await startService(service.name);
-            started.push(service.name);
-          } catch (startError) {
-            pushToast({
-              tone: "error",
-              title: "Start all failed",
-              message: getAppErrorMessage(
-                startError,
-                `Failed to start ${service.name}.`,
-              ),
-            });
-            return;
-          }
-        }
-
-        await refreshOverview().catch(() => undefined);
-        const segments = [];
-        if (started.length > 0) {
-          segments.push(`Started ${started.join(", ")}.`);
-        }
-        if (skipped.length > 0) {
-          segments.push(
-            `Skipped ${skipped.join(", ")} due to shared default ports.`,
-          );
-        }
-        if (segments.length > 0) {
-          pushToast({
-            tone: skipped.length > 0 ? "warning" : "success",
-            title: "Service startup complete",
-            message: segments.join(" "),
-          });
-        }
-      },
-      "Starting workspace services...",
-    );
-  }
-
-  async function handleStopAll() {
-    await runAsyncAction(
-      "workspace:stop-all",
-      async () => {
-        const running = services.filter(
-          (service) => service.status === "running",
-        );
-
-        for (const service of running) {
-          try {
-            await stopService(service.name);
-          } catch (invokeError) {
-            pushToast({
-              tone: "error",
-              title: "Stop all failed",
-              message: getAppErrorMessage(
-                invokeError,
-                `Failed to stop ${service.name}.`,
-              ),
-            });
-            return;
-          }
-        }
-
-        await refreshOverview().catch(() => undefined);
-        pushToast({
-          tone: running.length > 0 ? "success" : "info",
-          title: "Service stop complete",
-          message:
-            running.length > 0
-              ? "Stopped all running services."
-              : "No services were running.",
-        });
-      },
-      "Stopping workspace services...",
-    );
-  }
-
-  const runningProjects = projects.filter(
-    (project) => getLiveProjectStatus(project, services) === "running",
-  ).length;
-  const runningServices = services.filter(
-    (service) => service.status === "running",
-  ).length;
-  const orderedProjects = useMemo(
-    () =>
-      [...projects].sort(
-        (left, right) =>
-          (projectIssueCounts[right.id] ?? 0) -
-          (projectIssueCounts[left.id] ?? 0),
-      ),
-    [projectIssueCounts, projects],
-  );
-  const dashboardTabs = [
-    {
-      id: "workspace",
-      label: "Workspace",
-      meta: `${projects.length} projects ready`,
-    },
-    {
-      id: "projects",
-      label: "Projects",
-      meta: `${orderedProjects.length} tracked`,
-    },
-  ] as const;
-  const activeTab =
-    searchParams.get("tab") === "projects" ? "projects" : "workspace";
-
-  function handleSelectTab(tab: "workspace" | "projects") {
-    setSearchParams(
-      mergeSearchParams(searchParams, {
-        tab: tab === "workspace" ? undefined : tab,
-      }),
-    );
-  }
-
-  return (
-    <PageLayout
-      actions={
-        <>
-          <Button onClick={() => navigate("/projects?wizard=1")}>
-            Add Project
-          </Button>
-          <Button
-            busy={stopAllBusy}
-            busyLabel="Stopping services..."
-            disabled={globalServiceBusy && !stopAllBusy}
-            onClick={() => void handleStopAll()}
-          >
-            Stop All
-          </Button>
-          <Button
-            busy={startAllBusy}
-            busyLabel="Starting services..."
-            disabled={globalServiceBusy && !startAllBusy}
-            onClick={() => void handleStartAll()}
-            variant="primary"
-          >
-            Start All
-          </Button>
-        </>
-      }
-      subtitle="Project status, service health, and recent workspace activity at a glance."
-      title="Dashboard"
-    >
-      <div className="route-grid" data-columns="4">
-        <MetricCard
-          label="Running Projects"
-          tone={runningProjects > 0 ? "success" : "warning"}
-          value={String(runningProjects)}
-        />
-        <MetricCard
-          label="Active Services"
-          tone={runningServices > 0 ? "success" : "warning"}
-          value={String(runningServices)}
-        />
-        <MetricCard
-          label="Port Conflicts"
-          tone={portConflictCount > 0 ? "error" : "success"}
-          value={portHealthLoading ? "..." : String(portConflictCount)}
-        />
-        <MetricCard
-          label="Diagnostics Issues"
-          tone={
-            diagnosticsCoverage === 0
-              ? "warning"
-              : diagnosticIssueCount > 0
-                ? "warning"
-                : "success"
-          }
-          value={
-            diagnosticsCoverage === 0 ? "Not run" : String(diagnosticIssueCount)
-          }
-        />
-      </div>
-
-      <div className="stack workspace-shell">
-        <StickyTabs
-          activeTab={activeTab}
-          ariaLabel="Dashboard sections"
-          items={dashboardTabs}
-          onSelect={handleSelectTab}
-        />
-
-        <div
-          aria-labelledby="workspace-tab-workspace"
-          className="workspace-panel"
-          hidden={activeTab !== "workspace"}
-          id="workspace-panel-workspace"
-          role="tabpanel"
-        >
-          <Card>
-            <div className="page-header">
-              <div>
-                <h2>Workspace Health</h2>
-                <p>
-                  See what is running, what needs attention, and which projects
-                  need the next action.
-                </p>
-              </div>
-            </div>
-            {bootState ? (
-              <div className="detail-grid">
-                <div className="detail-item">
-                  <span className="detail-label">Environment</span>
-                  <strong>{bootState.environment}</strong>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Database</span>
-                  <strong className="mono detail-value">
-                    {bootState.dbPath}
-                  </strong>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Started</span>
-                  <strong>{formatUpdatedAt(bootState.startedAt)}</strong>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Projects Ready</span>
-                  <strong>{projects.length}</strong>
-                </div>
-              </div>
-            ) : (
-              <EmptyState
-                title={error ? error.code : "Loading boot state"}
-                description={
-                  error
-                    ? error.message
-                    : "Waiting for the native foundation to respond."
-                }
-              />
-            )}
-            <span className="helper-text">
-              Diagnostics snapshot coverage: {diagnosticsCoverage}/
-              {projects.length} projects. Open Diagnostics or a project detail
-              to run a fresh scan.
-            </span>
-          </Card>
-        </div>
-
-        <div
-          aria-labelledby="workspace-tab-projects"
-          className="workspace-panel"
-          hidden={activeTab !== "projects"}
-          id="workspace-panel-projects"
-          role="tabpanel"
-        >
-          {orderedProjects.length > 0 ? (
-            <div className="route-grid" data-columns="2">
-              {orderedProjects.slice(0, 4).map((project) => (
-                <ProjectCard
-                  issueCount={projectIssueCounts[project.id] ?? 0}
-                  key={project.id}
-                  project={project}
-                  onInspect={(projectId) =>
-                    navigate(`/projects?projectId=${projectId}`)
-                  }
-                />
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              title="No projects yet"
-              description="Import your first PHP project to activate Smart Scan, provisioning, diagnostics, and runtime control."
-            />
-          )}
-        </div>
-      </div>
-    </PageLayout>
-  );
-}
-
-function RecipesRoute() {
-  return (
-    <PageLayout
-      subtitle="Create a new project from a recipe or clone a repository and register it in one pass."
-      title="Recipes"
-    >
-      <RecipeStudio />
-    </PageLayout>
-  );
-}
-
-function ReliabilityRoute() {
-  const [searchParams] = useSearchParams();
-
-  return (
-    <PageLayout
-      subtitle="Recovery tools, safety checks, state inspection, and metadata backup for the current workspace."
-      title="Reliability"
-    >
-      <ReliabilityWorkbench projectId={searchParams.get("projectId")} />
-    </PageLayout>
-  );
-}
-
-function RootLayout() {
-  return (
-    <AppShell>
-      <Outlet />
-    </AppShell>
-  );
-}
-
-export const appRouter = createBrowserRouter([
-  {
-    path: "/",
-    element: <RootLayout />,
-    children: [
-      { index: true, element: <DashboardRoute /> },
-      {
-        path: "projects",
-        element: (
-          <LazyRoute>
-            <ProjectsRoute />
-          </LazyRoute>
-        ),
-      },
-      {
-        path: "services",
-        element: (
-          <LazyRoute>
-            <ServicesRoute />
-          </LazyRoute>
-        ),
-      },
-      {
-        path: "workers",
-        element: (
-          <LazyRoute>
-            <WorkersRoute />
-          </LazyRoute>
-        ),
-      },
-      {
-        path: "tasks",
-        element: (
-          <LazyRoute>
-            <TasksRoute />
-          </LazyRoute>
-        ),
-      },
-      {
-        path: "logs",
-        element: (
-          <LazyRoute>
-            <LogsRoute />
-          </LazyRoute>
-        ),
-      },
-      {
-        path: "diagnostics",
-        element: (
-          <LazyRoute>
-            <DiagnosticsRoute />
-          </LazyRoute>
-        ),
-      },
-      { path: "reliability", element: <ReliabilityRoute /> },
-      {
-        path: "databases",
-        element: (
-          <LazyRoute>
-            <DatabasesRoute />
-          </LazyRoute>
-        ),
-      },
-      {
-        path: "settings",
-        element: (
-          <LazyRoute>
-            <SettingsRoute />
-          </LazyRoute>
-        ),
-      },
-      { path: "recipes", element: <RecipesRoute /> },
-    ],
-  },
-]);

@@ -3752,8 +3752,14 @@ export function getMockResponseWithArgs<T>(
         latestVersion: "0.1.1",
         releaseChannel: "stable",
         checkedAt: timestamp,
-        notes:
-          "Updater wiring, release metadata delivery, and the Settings update flow are ready for packaged builds.",
+        notes: [
+          "## Preview release",
+          "",
+          "- Render signed release notes as **Markdown**.",
+          "- Keep update metadata and `stable.json` easy to scan.",
+          "",
+          "> Preview mode never installs an actual update.",
+        ].join("\n"),
         pubDate: timestamp,
         updateEndpoint: BROWSER_PREVIEW_UPDATE_ENDPOINT,
       } as T;

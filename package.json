@@ -1,7 +1,7 @@
 {
   "name": "devnest",
   "private": true,
-  "version": "0.2.18",
+  "version": "0.2.19",
   "type": "module",
   "scripts": {
     "check:env": "powershell -ExecutionPolicy Bypass -File scripts/check-windows-devnest-prereqs.ps1",
@@ -24,6 +24,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hook-form": "^7.54.0",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.0.0",
     "react-window": "^2.2.7",
     "zod": "^3.24.0",

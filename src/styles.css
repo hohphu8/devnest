@@ -1502,6 +1502,95 @@ a {
   gap: 6px;
 }
 
+.app-update-markdown {
+  display: grid;
+  gap: 10px;
+  max-width: 760px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.app-update-markdown > :first-child {
+  margin-top: 0;
+}
+
+.app-update-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.app-update-markdown h1,
+.app-update-markdown h2,
+.app-update-markdown h3,
+.app-update-markdown h4 {
+  margin: 10px 0 2px;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.app-update-markdown p,
+.app-update-markdown ul,
+.app-update-markdown ol,
+.app-update-markdown blockquote,
+.app-update-markdown pre {
+  margin: 0;
+}
+
+.app-update-markdown ul,
+.app-update-markdown ol {
+  display: grid;
+  gap: 5px;
+  padding-left: 20px;
+}
+
+.app-update-markdown li::marker {
+  color: var(--accent);
+}
+
+.app-update-markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.app-update-markdown code {
+  padding: 2px 5px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.app-update-markdown pre {
+  overflow-x: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: rgba(4, 9, 15, 0.72);
+}
+
+.app-update-markdown pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.app-update-markdown blockquote {
+  padding-left: 12px;
+  border-left: 2px solid var(--accent);
+  color: var(--text-muted);
+}
+
+.app-update-markdown hr {
+  width: 100%;
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--border-default);
+}
+
 .runtime-install-card {
   padding: 14px 18px;
 }

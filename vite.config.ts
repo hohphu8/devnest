@@ -18,7 +18,13 @@ export default defineConfig({
             return;
           }
 
-          if (id.includes("react") || id.includes("scheduler")) {
+          const normalizedId = id.replace(/\\/g, "/");
+
+          if (
+            /\/node_modules\/(react|react-dom|react-router|react-router-dom|scheduler)\//.test(
+              normalizedId,
+            )
+          ) {
             return "react-vendor";
           }
 

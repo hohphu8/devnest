@@ -16,7 +16,8 @@ export default defineConfig({
                     if (!id.includes("node_modules")) {
                         return;
                     }
-                    if (id.includes("react") || id.includes("scheduler")) {
+                    var normalizedId = id.replace(/\\/g, "/");
+                    if (/\/node_modules\/(react|react-dom|react-router|react-router-dom|scheduler)\//.test(normalizedId)) {
                         return "react-vendor";
                     }
                     if (id.includes("@tauri-apps")) {

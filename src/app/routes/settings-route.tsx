@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import {
   createBrowserRouter,
   useNavigate,
@@ -2910,7 +2911,29 @@ export default function SettingsRoute() {
                       ? `DevNest ${updateResult.latestVersion} is available`
                       : "Manual update flow"}
                   </strong>
-                  <span>{updateSummary}</span>
+                  {appUpdateState === "updateAvailable" &&
+                  updateResult?.notes ? (
+                    <div className="app-update-markdown">
+                      <ReactMarkdown
+                        components={{
+                          a: ({ children, href, title }) => (
+                            <a
+                              href={href}
+                              rel="noreferrer"
+                              target="_blank"
+                              title={title}
+                            >
+                              {children}
+                            </a>
+                          ),
+                        }}
+                      >
+                        {updateResult.notes}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <span>{updateSummary}</span>
+                  )}
                 </div>
                 {updateResult?.pubDate ? (
                   <span className="helper-text">

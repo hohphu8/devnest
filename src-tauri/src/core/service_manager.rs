@@ -23,10 +23,12 @@ use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
 const MANAGED_LOG_ROTATION_BYTES: u64 = 10 * 1024 * 1024;
+static SERVICE_OPERATION_LOCK: Mutex<()> = Mutex::new(());
 
 struct SyncResult {
     running_pid: Option<u32>,
@@ -1309,6 +1311,7 @@ pub fn start_service(
     state: &AppState,
     service: ServiceName,
 ) -> Result<ServiceState, AppError> {
+    let _operation_guard = SERVICE_OPERATION_LOCK.lock().map_err(|_| mutex_error())?;
     let current = get_service_status(connection, state, service.clone())?;
     if matches!(current.status, ServiceStatus::Running) && current.pid.is_some() {
         return Ok(current);
@@ -1417,6 +1420,7 @@ pub fn stop_service(
     state: &AppState,
     service: ServiceName,
 ) -> Result<ServiceState, AppError> {
+    let _operation_guard = SERVICE_OPERATION_LOCK.lock().map_err(|_| mutex_error())?;
     let current = get_service_status(connection, state, service.clone())?;
     let expected_port = current
         .port

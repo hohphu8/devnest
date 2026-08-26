@@ -224,7 +224,18 @@ where
     unreachable!("boot retry loop always returns")
 }
 
-fn save_boot_service_error(connection: &Connection, service: &ServiceName, error: &AppError) {
+fn save_boot_service_error(
+    connection: &Connection,
+    state: &AppState,
+    service: &ServiceName,
+    error: &AppError,
+) {
+    if let Ok(current) = service_manager::get_service_status(connection, state, service.clone()) {
+        if matches!(current.status, ServiceStatus::Running) && current.pid.is_some() {
+            return;
+        }
+    }
+
     let Ok(current) =
         crate::storage::repositories::ServiceRepository::get(connection, service.as_str())
     else {
@@ -256,7 +267,7 @@ fn auto_start_boot_services(connection: &Connection, state: &AppState) {
             thread::sleep,
         );
         if let Err(error) = result {
-            save_boot_service_error(connection, &service, &error);
+            save_boot_service_error(connection, state, &service, &error);
             eprintln!(
                 "DevNest boot auto-start failed for {}: {}",
                 service.display_name(),

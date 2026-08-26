@@ -1,4 +1,4 @@
-import { useEffect, useRef, type PropsWithChildren } from "react";
+import { useEffect, useRef, useState, type PropsWithChildren } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useWorkspaceStore } from "@/app/store/workspace-store";
 
@@ -11,48 +11,11 @@ function hasTauriRuntime(): boolean {
 export function AppProviders({ children }: PropsWithChildren) {
   const bootSettleFallbackRef = useRef<number | undefined>(undefined);
   const bootCompleteRefreshHandledRef = useRef(false);
+  const [bootListenerReady, setBootListenerReady] = useState(() => !hasTauriRuntime());
   const workspaceLoaded = useWorkspaceStore((state) => state.loaded);
   const loadOverview = useWorkspaceStore((state) => state.loadOverview);
   const refreshOverview = useWorkspaceStore((state) => state.refreshOverview);
   const loadPortSummary = useWorkspaceStore((state) => state.loadPortSummary);
-
-  useEffect(() => {
-    if (!workspaceLoaded) {
-      void loadOverview().catch(() => undefined);
-    }
-  }, [loadOverview, workspaceLoaded]);
-
-  useEffect(() => {
-    if (workspaceLoaded) {
-      void loadPortSummary().catch(() => undefined);
-    }
-  }, [loadPortSummary, workspaceLoaded]);
-
-  useEffect(() => {
-    if (!workspaceLoaded || !hasTauriRuntime()) {
-      return;
-    }
-
-    if (bootCompleteRefreshHandledRef.current) {
-      return;
-    }
-
-    bootSettleFallbackRef.current = window.setTimeout(() => {
-      if (!bootCompleteRefreshHandledRef.current) {
-        bootCompleteRefreshHandledRef.current = true;
-        void refreshOverview({ silent: true })
-          .then(() => loadPortSummary())
-          .catch(() => undefined);
-      }
-    }, 5500);
-
-    return () => {
-      if (bootSettleFallbackRef.current !== undefined) {
-        window.clearTimeout(bootSettleFallbackRef.current);
-        bootSettleFallbackRef.current = undefined;
-      }
-    };
-  }, [loadPortSummary, refreshOverview, workspaceLoaded]);
 
   useEffect(() => {
     if (!hasTauriRuntime()) {
@@ -94,14 +57,59 @@ export function AppProviders({ children }: PropsWithChildren) {
         }
 
         unlisten = dispose;
+        setBootListenerReady(true);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!disposed) {
+          setBootListenerReady(true);
+        }
+      });
 
     return () => {
       disposed = true;
       unlisten?.();
     };
   }, [loadPortSummary, refreshOverview]);
+
+  useEffect(() => {
+    if (!bootListenerReady || workspaceLoaded) {
+      return;
+    }
+
+    void loadOverview().catch(() => undefined);
+  }, [bootListenerReady, loadOverview, workspaceLoaded]);
+
+  useEffect(() => {
+    if (workspaceLoaded) {
+      void loadPortSummary().catch(() => undefined);
+    }
+  }, [loadPortSummary, workspaceLoaded]);
+
+  useEffect(() => {
+    if (!workspaceLoaded || !hasTauriRuntime()) {
+      return;
+    }
+
+    if (bootCompleteRefreshHandledRef.current) {
+      return;
+    }
+
+    bootSettleFallbackRef.current = window.setTimeout(() => {
+      if (!bootCompleteRefreshHandledRef.current) {
+        bootCompleteRefreshHandledRef.current = true;
+        void refreshOverview({ silent: true })
+          .then(() => loadPortSummary())
+          .catch(() => undefined);
+      }
+    }, 5500);
+
+    return () => {
+      if (bootSettleFallbackRef.current !== undefined) {
+        window.clearTimeout(bootSettleFallbackRef.current);
+        bootSettleFallbackRef.current = undefined;
+      }
+    };
+  }, [loadPortSummary, refreshOverview, workspaceLoaded]);
 
   return children;
 }

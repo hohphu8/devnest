@@ -138,6 +138,7 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 const MAIN_WINDOW_LABEL: &str = "main";
 const BOOT_BACKGROUND_COMPLETE_EVENT: &str = "devnest:boot-background-complete";
 const BOOT_SERVICE_SETTLE_DELAY: Duration = Duration::from_secs(3);
+const SERVICE_HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(3);
 const BOOT_SERVICE_STABILIZATION_DELAY: Duration = Duration::from_secs(2);
 const BOOT_SERVICE_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(5)];
 
@@ -474,8 +475,39 @@ fn start_background_boot_tasks<R: tauri::Runtime>(app_handle: tauri::AppHandle<R
 
             start_scheduled_task_history_maintenance(&state);
             start_scheduled_task_scheduler(&state);
+            start_service_health_monitor(app_handle.clone());
             let _ = app_handle.emit(BOOT_BACKGROUND_COMPLETE_EVENT, ());
             perf::log_elapsed("boot background total", started_at);
+        });
+}
+
+fn start_service_health_monitor<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
+    let _ = thread::Builder::new()
+        .name("devnest-service-health".to_string())
+        .spawn(move || {
+            loop {
+                let state = app_handle.state::<AppState>();
+                if can_exit(&state) {
+                    break;
+                }
+
+                match Connection::open(&state.db_path) {
+                    Ok(connection) => {
+                        if let Err(error) =
+                            service_manager::maintain_managed_service_health(&connection, &state)
+                        {
+                            eprintln!("DevNest service health check failed: {error}");
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "DevNest service health check could not open the database: {error}"
+                        );
+                    }
+                }
+
+                thread::sleep(SERVICE_HEALTH_POLL_INTERVAL);
+            }
         });
 }
 
@@ -553,10 +585,10 @@ fn cleanup_for_full_exit(state: &AppState) {
 
 fn request_full_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let state = app.state::<AppState>();
-    cleanup_for_full_exit(&state);
     if let Ok(mut allow_exit) = state.allow_exit.lock() {
         *allow_exit = true;
     }
+    cleanup_for_full_exit(&state);
     app.exit(0);
 }
 

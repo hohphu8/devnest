@@ -290,7 +290,7 @@ fn default_php_values() -> BTreeMap<String, String> {
 
 fn default_apache_values() -> BTreeMap<String, String> {
     BTreeMap::from([
-        ("timeout".to_string(), "60".to_string()),
+        ("timeout".to_string(), "120".to_string()),
         ("keep_alive".to_string(), "on".to_string()),
         ("keep_alive_timeout".to_string(), "5".to_string()),
         ("max_keep_alive_requests".to_string(), "100".to_string()),
@@ -442,7 +442,7 @@ pub fn load_apache_runtime_config(
     Ok(ApacheRuntimeConfig {
         timeout: parse_u32_with_min(
             "timeout",
-            values.get("timeout").map(String::as_str).unwrap_or("60"),
+            values.get("timeout").map(String::as_str).unwrap_or("120"),
             1,
         )?,
         keep_alive: parse_toggle(
@@ -1108,7 +1108,7 @@ fn load_apache_runtime_config_from_values(
     Ok(ApacheRuntimeConfig {
         timeout: parse_u32_with_min(
             "timeout",
-            values.get("timeout").map(String::as_str).unwrap_or("60"),
+            values.get("timeout").map(String::as_str).unwrap_or("120"),
             1,
         )?,
         keep_alive: parse_toggle(

@@ -19,16 +19,19 @@ use crate::utils::process::{
     configure_background_command, is_process_running, kill_process_tree, process_names, run_command,
 };
 use rusqlite::Connection;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const MANAGED_LOG_ROTATION_BYTES: u64 = 10 * 1024 * 1024;
 static SERVICE_OPERATION_LOCK: Mutex<()> = Mutex::new(());
+static SERVICE_RECOVERY_PENDING: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+static PHP_FASTCGI_RECOVERY_PENDING: Mutex<bool> = Mutex::new(false);
 
 struct SyncResult {
     running_pid: Option<u32>,
@@ -93,6 +96,50 @@ fn mutex_error() -> AppError {
         "SERVICE_STATE_LOCK_FAILED",
         "Could not access the in-memory service state cache.",
     )
+}
+
+fn mark_service_recovery_pending(service: &ServiceName) -> Result<(), AppError> {
+    SERVICE_RECOVERY_PENDING
+        .lock()
+        .map_err(|_| mutex_error())?
+        .insert(service.as_str().to_string());
+    Ok(())
+}
+
+fn clear_service_recovery_pending(service: &ServiceName) -> Result<(), AppError> {
+    SERVICE_RECOVERY_PENDING
+        .lock()
+        .map_err(|_| mutex_error())?
+        .remove(service.as_str());
+    Ok(())
+}
+
+fn pending_service_recoveries() -> Result<Vec<ServiceName>, AppError> {
+    let pending = SERVICE_RECOVERY_PENDING.lock().map_err(|_| mutex_error())?;
+    Ok([ServiceName::Apache, ServiceName::Nginx]
+        .into_iter()
+        .filter(|service| pending.contains(service.as_str()))
+        .collect())
+}
+
+fn mark_php_fastcgi_recovery_pending() -> Result<(), AppError> {
+    *PHP_FASTCGI_RECOVERY_PENDING
+        .lock()
+        .map_err(|_| mutex_error())? = true;
+    Ok(())
+}
+
+fn clear_php_fastcgi_recovery_pending() -> Result<(), AppError> {
+    *PHP_FASTCGI_RECOVERY_PENDING
+        .lock()
+        .map_err(|_| mutex_error())? = false;
+    Ok(())
+}
+
+fn php_fastcgi_recovery_is_pending() -> Result<bool, AppError> {
+    Ok(*PHP_FASTCGI_RECOVERY_PENDING
+        .lock()
+        .map_err(|_| mutex_error())?)
 }
 
 fn status_message(service: &ServiceName, exit_status: &ExitStatus) -> Option<String> {
@@ -753,6 +800,106 @@ fn ensure_php_fastcgi_processes(
     Ok(())
 }
 
+/// Keeps managed web servers and their FastCGI backends alive after a transient exit.
+///
+/// The process map is also the desired-state boundary: processes removed by an explicit
+/// stop are not watched, so a manual stop remains a manual stop.
+pub(crate) fn maintain_managed_service_health(
+    connection: &Connection,
+    state: &AppState,
+) -> Result<(), AppError> {
+    let mut dead_web_services = Vec::new();
+    let mut active_web_services = Vec::new();
+    let mut dead_php_backend = false;
+
+    {
+        let mut processes = state.managed_processes.lock().map_err(|_| mutex_error())?;
+
+        for service in [ServiceName::Apache, ServiceName::Nginx] {
+            let key = service.as_str().to_string();
+            let process_state = processes
+                .get_mut(&key)
+                .map(|process| process.child.try_wait());
+
+            match process_state {
+                Some(Ok(None)) => active_web_services.push(service),
+                Some(Ok(Some(_))) | Some(Err(_)) => {
+                    processes.remove(&key);
+                    dead_web_services.push(service);
+                }
+                None => {}
+            }
+        }
+
+        let dead_php_keys = processes
+            .iter_mut()
+            .filter(|(key, _)| key.starts_with("php-"))
+            .filter_map(|(key, process)| match process.child.try_wait() {
+                Ok(None) => None,
+                Ok(Some(_)) | Err(_) => Some(key.clone()),
+            })
+            .collect::<Vec<_>>();
+
+        for key in dead_php_keys {
+            processes.remove(&key);
+            dead_php_backend = true;
+        }
+    }
+
+    for service in dead_web_services {
+        mark_service_recovery_pending(&service)?;
+    }
+    if dead_php_backend {
+        mark_php_fastcgi_recovery_pending()?;
+    }
+
+    for service in pending_service_recoveries()? {
+        let current = get_service_status(connection, state, service.clone())?;
+        if matches!(current.status, ServiceStatus::Running) && current.pid.is_some() {
+            clear_service_recovery_pending(&service)?;
+            continue;
+        }
+
+        match start_service(connection, state, service.clone()) {
+            Ok(_) => {
+                eprintln!(
+                    "DevNest recovered the managed {} service after an unexpected exit.",
+                    service.display_name()
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "DevNest could not recover the managed {} service yet: {}",
+                    service.display_name(),
+                    error
+                );
+            }
+        }
+    }
+
+    if php_fastcgi_recovery_is_pending()? {
+        let _operation_guard = SERVICE_OPERATION_LOCK.lock().map_err(|_| mutex_error())?;
+        let mut recovery_failed = false;
+
+        for service in active_web_services {
+            if let Err(error) = ensure_php_fastcgi_processes(connection, state, &service) {
+                recovery_failed = true;
+                eprintln!(
+                    "DevNest could not recover all PHP FastCGI backends for {} yet: {}",
+                    service.display_name(),
+                    error
+                );
+            }
+        }
+
+        if !recovery_failed {
+            clear_php_fastcgi_recovery_pending()?;
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn stop_project_php_fastcgi_process(
     state: &AppState,
     project_id: &str,
@@ -1288,7 +1435,9 @@ fn save_started_runtime(
         .map_err(|_| mutex_error())?
         .insert(service.as_str().to_string(), started.process);
 
-    save_running_state(connection, service, pid, port)
+    let state = save_running_state(connection, service, pid, port)?;
+    clear_service_recovery_pending(service)?;
+    Ok(state)
 }
 
 fn redis_should_try_system_fallback(
@@ -1314,6 +1463,7 @@ pub fn start_service(
     let _operation_guard = SERVICE_OPERATION_LOCK.lock().map_err(|_| mutex_error())?;
     let current = get_service_status(connection, state, service.clone())?;
     if matches!(current.status, ServiceStatus::Running) && current.pid.is_some() {
+        clear_service_recovery_pending(&service)?;
         return Ok(current);
     }
 
@@ -1351,6 +1501,7 @@ pub fn start_service(
     }
     if service_uses_php_fastcgi(&service) {
         ensure_php_fastcgi_processes(connection, state, &service)?;
+        clear_php_fastcgi_recovery_pending()?;
     }
 
     match start_runtime_process(&service, runtime.clone()) {
@@ -1421,6 +1572,7 @@ pub fn stop_service(
     service: ServiceName,
 ) -> Result<ServiceState, AppError> {
     let _operation_guard = SERVICE_OPERATION_LOCK.lock().map_err(|_| mutex_error())?;
+    clear_service_recovery_pending(&service)?;
     let current = get_service_status(connection, state, service.clone())?;
     let expected_port = current
         .port

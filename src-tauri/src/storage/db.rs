@@ -249,6 +249,12 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
           FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS optional_php_fastcgi_backend (
+          id INTEGER PRIMARY KEY NOT NULL CHECK(id = 1),
+          port INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path);
         CREATE INDEX IF NOT EXISTS idx_projects_domain ON projects(domain);
         CREATE INDEX IF NOT EXISTS idx_project_env_vars_project_id ON project_env_vars(project_id);
@@ -293,10 +299,29 @@ pub fn init_database(db_path: &Path) -> Result<(), AppError> {
     migrate_frankenphp_octane_workers(&connection)?;
     migrate_frankenphp_worker_framework_expansion(&connection)?;
     migrate_project_php_fastcgi_backends(&connection)?;
+    migrate_optional_php_fastcgi_backend(&connection)?;
     migrate_scheduled_task_run_history_index(&connection)?;
     ServiceRepository::seed_defaults(&connection)?;
 
     Ok(())
+}
+
+fn migrate_optional_php_fastcgi_backend(connection: &Connection) -> Result<(), AppError> {
+    const MIGRATION: &str = "0014_optional_php_fastcgi_backend";
+    if migration_applied(connection, MIGRATION)? {
+        return Ok(());
+    }
+
+    connection.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS optional_php_fastcgi_backend (
+          id INTEGER PRIMARY KEY NOT NULL CHECK(id = 1),
+          port INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        ",
+    )?;
+    record_migration(connection, MIGRATION)
 }
 
 fn migrate_scheduled_task_run_history_index(connection: &Connection) -> Result<(), AppError> {

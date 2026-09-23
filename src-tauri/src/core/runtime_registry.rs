@@ -514,29 +514,6 @@ pub fn resolve_php_binary(connection: &Connection, version: &str) -> Result<Path
     ))
 }
 
-fn php_version_slot(version: &str) -> Option<u16> {
-    let normalized = version.trim();
-    if normalized.is_empty() {
-        return None;
-    }
-
-    let mut parts = normalized.split('.');
-    let major = parts.next()?.parse::<u16>().ok()?;
-    let minor = parts.next()?.parse::<u16>().ok()?;
-    Some((major * 10) + minor)
-}
-
-pub fn php_fastcgi_port(version: &str) -> Result<u16, AppError> {
-    let slot = php_version_slot(version).ok_or_else(|| {
-        AppError::new_validation(
-            "INVALID_PHP_VERSION",
-            format!("PHP version `{version}` is not valid for FastCGI routing."),
-        )
-    })?;
-
-    Ok(9000 + slot)
-}
-
 fn php_runtime_home_from_binary(binary_path: &Path) -> Result<PathBuf, AppError> {
     let home = binary_path.parent().ok_or_else(|| {
         AppError::new_validation(
@@ -953,6 +930,7 @@ pub fn resolve_php_fastcgi_runtime(
     connection: &Connection,
     workspace_dir: &Path,
     version: &str,
+    port: u16,
 ) -> Result<RuntimeCommand, AppError> {
     let tracked_runtime =
         resolve_runtime_entry_from_registry(connection, &RuntimeType::Php, Some(version))?;
@@ -962,7 +940,6 @@ pub fn resolve_php_fastcgi_runtime(
         .unwrap_or(resolve_php_binary(connection, version)?);
     let runtime_home = php_runtime_home_from_binary(&php_binary)?;
     let binary_path = php_fastcgi_binary_from_home(&runtime_home)?;
-    let port = php_fastcgi_port(version)?;
     let config_path = build_php_fastcgi_config(
         connection,
         &runtime_home,
@@ -2285,7 +2262,7 @@ pub fn sync_runtime_versions(
 mod tests {
     use super::{
         build_frankenphp_php_config, parse_frankenphp_embedded_php_version_output,
-        parse_runtime_version_output, php_extension_enabled_by_default, php_fastcgi_port,
+        parse_runtime_version_output, php_extension_enabled_by_default,
         resolve_php_fastcgi_runtime, resolve_project_php_fastcgi_runtime,
         resolve_runtime_path_from_registry, resolve_service_runtime, runtime_version_family,
         runtime_version_matches, sync_runtime_versions,
@@ -2575,7 +2552,7 @@ mod tests {
         .expect("runtime config overrides should save");
 
         set_env_var("DEVNEST_RUNTIME_PHP_84_BIN", &php_binary);
-        let runtime_command = resolve_php_fastcgi_runtime(&connection, &workspace_dir, "8.4")
+        let runtime_command = resolve_php_fastcgi_runtime(&connection, &workspace_dir, "8.4", 9500)
             .expect("php runtime should resolve");
         remove_env_var("DEVNEST_RUNTIME_PHP_84_BIN");
 
@@ -2819,14 +2796,14 @@ mod tests {
         fs::write(ext_dir.join("php_pdo_mysql.dll"), "fake").expect("fake extension should write");
 
         set_env_var("DEVNEST_RUNTIME_PHP_84_BIN", &php_binary);
-        let runtime = resolve_php_fastcgi_runtime(&connection, &workspace_dir, "8.4")
+        let runtime = resolve_php_fastcgi_runtime(&connection, &workspace_dir, "8.4", 9500)
             .expect("php fastcgi runtime should resolve");
         remove_env_var("DEVNEST_RUNTIME_PHP_84_BIN");
 
         let config_path = PathBuf::from(&runtime.args[3]);
         let config_content = fs::read_to_string(&config_path).expect("php.ini should exist");
 
-        assert_eq!(runtime.port, Some(9084));
+        assert_eq!(runtime.port, Some(9500));
         assert_eq!(runtime.binary_path, php_cgi_binary);
         assert!(config_path.ends_with(PathBuf::from("php").join("8.4").join("php.ini")));
         assert!(config_content.contains("extension=php_mbstring.dll"));
@@ -2924,15 +2901,6 @@ mod tests {
 
         fs::remove_dir_all(root).ok();
         fs::remove_file(db_path).ok();
-    }
-
-    #[test]
-    fn maps_php_version_to_fastcgi_port() {
-        assert_eq!(php_fastcgi_port("8.1").expect("port should resolve"), 9081);
-        assert_eq!(
-            php_fastcgi_port("8.4.20").expect("port should resolve"),
-            9084
-        );
     }
 
     #[test]

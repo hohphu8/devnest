@@ -15,6 +15,7 @@ use crate::models::runtime::{PhpExtensionState, PhpFunctionState, RuntimeType, R
 use crate::models::service::{ServiceName, ServiceState, ServiceStatus};
 use rusqlite::{Connection, Error as SqlError, OptionalExtension, Row, params};
 use std::collections::HashMap;
+use std::net::TcpListener;
 use std::path::{Component, Path};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -825,6 +826,54 @@ impl ProjectPhpFastcgiBackendRepository {
             "DELETE FROM project_php_fastcgi_backends WHERE project_id = ?1",
             [project_id],
         )? > 0)
+    }
+}
+
+pub struct OptionalPhpFastcgiBackendRepository;
+
+impl OptionalPhpFastcgiBackendRepository {
+    const MIN_PORT: u16 = 9500;
+    const MAX_PORT: u16 = 9999;
+
+    fn can_bind(port: u16) -> bool {
+        TcpListener::bind(("127.0.0.1", port)).is_ok()
+    }
+
+    fn first_bindable_port(mut can_bind: impl FnMut(u16) -> bool) -> Option<u16> {
+        (Self::MIN_PORT..=Self::MAX_PORT).find(|port| can_bind(*port))
+    }
+
+    pub fn get_or_allocate_port(
+        connection: &Connection,
+        preserve_occupied: bool,
+    ) -> Result<u16, AppError> {
+        let existing = connection
+            .query_row(
+                "SELECT port FROM optional_php_fastcgi_backend WHERE id = 1",
+                [],
+                |row| row.get::<_, u16>(0),
+            )
+            .optional()?;
+
+        if let Some(port) = existing {
+            if preserve_occupied || Self::can_bind(port) {
+                return Ok(port);
+            }
+        }
+
+        let port = Self::first_bindable_port(Self::can_bind).ok_or_else(|| {
+            AppError::new_validation(
+                "PHP_FASTCGI_PORTS_EXHAUSTED",
+                "DevNest could not find an available local port for phpMyAdmin's PHP backend.",
+            )
+        })?;
+        connection.execute(
+            "INSERT INTO optional_php_fastcgi_backend (id, port, updated_at)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET port = excluded.port, updated_at = excluded.updated_at",
+            params![port, now_iso()?],
+        )?;
+        Ok(port)
     }
 }
 
@@ -2069,8 +2118,8 @@ impl PersistentTunnelSetupRepository {
 #[cfg(test)]
 mod tests {
     use super::{
-        OptionalToolVersionRepository, PersistentTunnelSetupRepository,
-        PhpExtensionOverrideRepository, ProjectEnvVarRepository,
+        OptionalPhpFastcgiBackendRepository, OptionalToolVersionRepository,
+        PersistentTunnelSetupRepository, PhpExtensionOverrideRepository, ProjectEnvVarRepository,
         ProjectPersistentHostnameRepository, ProjectPhpFastcgiBackendRepository, ProjectRepository,
         RuntimeConfigOverrideRepository, RuntimeSuppressionRepository, RuntimeVersionRepository,
         ServiceRepository,
@@ -2086,6 +2135,7 @@ mod tests {
     use rusqlite::{Connection, params};
     use std::collections::BTreeMap;
     use std::fs;
+    use std::net::TcpListener;
     use std::path::{Path, PathBuf};
     use uuid::Uuid;
 
@@ -2094,6 +2144,29 @@ mod tests {
         init_database(&db_path).expect("database initialization should succeed");
         let connection = Connection::open(&db_path).expect("test database connection should open");
         (db_path, connection)
+    }
+
+    #[test]
+    fn optional_php_backend_moves_off_a_port_that_can_no_longer_bind() {
+        let (db_path, connection) = setup_test_db();
+        let first = OptionalPhpFastcgiBackendRepository::get_or_allocate_port(&connection, false)
+            .expect("initial backend port should be allocated");
+        let blocker =
+            TcpListener::bind(("127.0.0.1", first)).expect("allocated port should be bindable");
+
+        let replacement =
+            OptionalPhpFastcgiBackendRepository::get_or_allocate_port(&connection, false)
+                .expect("blocked backend port should be replaced");
+        assert_ne!(replacement, first);
+        assert_eq!(
+            OptionalPhpFastcgiBackendRepository::get_or_allocate_port(&connection, true)
+                .expect("active backend port should be preserved"),
+            replacement
+        );
+
+        drop(blocker);
+        drop(connection);
+        fs::remove_file(db_path).ok();
     }
 
     fn make_temp_project_root() -> PathBuf {

@@ -292,6 +292,7 @@ fn finalize_phpmyadmin_install(
         )
     })?;
     let php_version = preferred_php_version_for_optional_web_tool(connection)?;
+    let php_port = service_manager::optional_php_fastcgi_port(connection, state, &php_version)?;
     ensure_phpmyadmin_config_file(install_root)?;
 
     for server_type in [
@@ -304,6 +305,7 @@ fn finalize_phpmyadmin_install(
             install_root,
             &server_type,
             &php_version,
+            Some(php_port),
         )?;
     }
 

@@ -10,9 +10,9 @@ use crate::models::tunnel::TunnelStatus;
 use crate::state::{AppState, ManagedServiceProcess};
 use crate::storage::frankenphp_octane::FrankenphpOctaneWorkerRepository;
 use crate::storage::repositories::{
-    OptionalToolVersionRepository, ProjectPersistentHostnameRepository,
-    ProjectPhpFastcgiBackendRepository, ProjectRepository, RuntimeVersionRepository,
-    ServiceRepository,
+    OptionalPhpFastcgiBackendRepository, OptionalToolVersionRepository,
+    ProjectPersistentHostnameRepository, ProjectPhpFastcgiBackendRepository, ProjectRepository,
+    RuntimeVersionRepository, ServiceRepository,
 };
 use crate::utils::paths::managed_logs_dir;
 use crate::utils::process::{
@@ -268,6 +268,21 @@ enum ServiceRuntimeStart {
 
 fn php_process_key(version: &str) -> String {
     format!("php-{version}")
+}
+
+pub(crate) fn optional_php_fastcgi_port(
+    connection: &Connection,
+    state: &AppState,
+    version: &str,
+) -> Result<u16, AppError> {
+    let key = php_process_key(version);
+    let is_running = state
+        .managed_processes
+        .lock()
+        .map_err(|_| mutex_error())?
+        .get_mut(&key)
+        .is_some_and(|process| matches!(process.child.try_wait(), Ok(None)));
+    OptionalPhpFastcgiBackendRepository::get_or_allocate_port(connection, is_running)
 }
 
 fn project_php_process_key(project_id: &str) -> String {
@@ -570,11 +585,17 @@ fn sync_phpmyadmin_config_for_service(
     }
 
     let php_version = preferred_php_version_for_optional_web_tool(connection)?;
+    let php_port = if matches!(server_type, ServerType::Apache | ServerType::Nginx) {
+        Some(optional_php_fastcgi_port(connection, state, &php_version)?)
+    } else {
+        None
+    };
     config_generator::generate_phpmyadmin_config(
         &state.workspace_dir,
         install_root,
         server_type,
         &php_version,
+        php_port,
     )?;
     Ok(())
 }
@@ -788,10 +809,12 @@ fn ensure_php_fastcgi_processes(
             continue;
         }
 
+        let port = optional_php_fastcgi_port(connection, state, &version)?;
         let runtime = runtime_registry::resolve_php_fastcgi_runtime(
             connection,
             &state.workspace_dir,
             &version,
+            port,
         )?;
         let label = format!("PHP {version} FastCGI");
         start_php_fastcgi_process(state, &label, key, runtime)?;

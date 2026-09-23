@@ -1,5 +1,4 @@
 use crate::core::local_ssl;
-use crate::core::runtime_registry;
 use crate::error::AppError;
 use crate::models::project::ProjectStatus;
 use crate::models::project::{FrameworkType, FrankenphpMode, Project, ServerType};
@@ -521,6 +520,7 @@ pub fn generate_phpmyadmin_config(
     install_root: &Path,
     server_type: &ServerType,
     php_version: &str,
+    php_fastcgi_port: Option<u16>,
 ) -> Result<RenderedVhostConfig, AppError> {
     let project = Project {
         id: "devnest-phpmyadmin".to_string(),
@@ -541,9 +541,12 @@ pub fn generate_phpmyadmin_config(
     };
 
     let php_port = match server_type {
-        ServerType::Apache | ServerType::Nginx => {
-            Some(runtime_registry::php_fastcgi_port(php_version)?)
-        }
+        ServerType::Apache | ServerType::Nginx => Some(php_fastcgi_port.ok_or_else(|| {
+            AppError::new_validation(
+                "PHP_FASTCGI_PORT_MISSING",
+                "DevNest could not assign phpMyAdmin's local PHP backend port.",
+            )
+        })?),
         ServerType::Frankenphp => None,
     };
     let rendered = render_config(&project, workspace_dir, true, &[], php_port, None)?;
@@ -851,12 +854,18 @@ mod tests {
         let project_root = make_project_root(false);
         fs::write(project_root.join("index.php"), "<?php").expect("phpmyadmin index should write");
 
-        let rendered =
-            generate_phpmyadmin_config(&workspace, &project_root, &ServerType::Apache, "8.2.30")
-                .expect("phpmyadmin config should generate");
+        let rendered = generate_phpmyadmin_config(
+            &workspace,
+            &project_root,
+            &ServerType::Apache,
+            "8.2.30",
+            Some(9500),
+        )
+        .expect("phpmyadmin config should generate");
 
         assert!(rendered.output_path.exists());
         assert!(rendered.config_text.contains(PHPMYADMIN_DOMAIN));
+        assert!(rendered.config_text.contains("127.0.0.1:9500"));
 
         let removed = remove_managed_config(&workspace, &ServerType::Apache, PHPMYADMIN_DOMAIN)
             .expect("managed config should remove");
